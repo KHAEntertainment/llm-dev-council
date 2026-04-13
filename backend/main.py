@@ -4,13 +4,16 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import uuid
 import json
 import asyncio
+import httpx
 
 from . import storage
+from . import presets
 from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings
+from .config import load_config, save_config, get_council_models, get_chairman_model, OPENROUTER_API_KEY
 
 app = FastAPI(title="LLM Council API")
 
@@ -26,12 +29,37 @@ app.add_middleware(
 
 class CreateConversationRequest(BaseModel):
     """Request to create a new conversation."""
-    pass
+    council_models: Optional[List[str]] = None
+    chairman_model: Optional[str] = None
 
 
 class SendMessageRequest(BaseModel):
     """Request to send a message in a conversation."""
     content: str
+
+
+class UpdateConfigRequest(BaseModel):
+    """Request to update council configuration."""
+    council_models: Optional[List[str]] = None
+    chairman_model: Optional[str] = None
+
+
+class UpdateConversationModelsRequest(BaseModel):
+    """Request to update a conversation's model config."""
+    council_models: List[str]
+    chairman_model: str
+
+
+class SavePresetRequest(BaseModel):
+    """Request to save a preset."""
+    name: str
+    council_models: List[str]
+    chairman_model: str
+
+
+class ArchiveConversationRequest(BaseModel):
+    """Request to archive/unarchive a conversation."""
+    archived: bool
 
 
 class ConversationMetadata(BaseModel):
@@ -40,6 +68,7 @@ class ConversationMetadata(BaseModel):
     created_at: str
     title: str
     message_count: int
+    archived: bool = False
 
 
 class Conversation(BaseModel):
@@ -48,6 +77,8 @@ class Conversation(BaseModel):
     created_at: str
     title: str
     messages: List[Dict[str, Any]]
+    council_models: Optional[List[str]] = None
+    chairman_model: Optional[str] = None
 
 
 @app.get("/")
@@ -57,16 +88,19 @@ async def root():
 
 
 @app.get("/api/conversations", response_model=List[ConversationMetadata])
-async def list_conversations():
-    """List all conversations (metadata only)."""
-    return storage.list_conversations()
+async def list_conversations(archived: bool = False):
+    """List conversations (metadata only), filtered by archive status."""
+    return storage.list_conversations(archived=archived)
 
 
 @app.post("/api/conversations", response_model=Conversation)
 async def create_conversation(request: CreateConversationRequest):
     """Create a new conversation."""
     conversation_id = str(uuid.uuid4())
-    conversation = storage.create_conversation(conversation_id)
+    # Use provided models or fall back to global config
+    council_models = request.council_models or get_council_models()
+    chairman_model = request.chairman_model or get_chairman_model()
+    conversation = storage.create_conversation(conversation_id, council_models, chairman_model)
     return conversation
 
 
@@ -101,9 +135,15 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
         title = await generate_conversation_title(request.content)
         storage.update_conversation_title(conversation_id, title)
 
+    # Get per-conversation model config
+    council_models = conversation.get("council_models")
+    chairman_model = conversation.get("chairman_model")
+
     # Run the 3-stage council process
     stage1_results, stage2_results, stage3_result, metadata = await run_full_council(
-        request.content
+        request.content,
+        council_models=council_models,
+        chairman_model=chairman_model
     )
 
     # Add assistant message with all stages
@@ -147,20 +187,25 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             if is_first_message:
                 title_task = asyncio.create_task(generate_conversation_title(request.content))
 
+            # Get per-conversation model config
+            conv = storage.get_conversation(conversation_id)
+            council_models = conv.get("council_models")
+            chairman_model = conv.get("chairman_model")
+
             # Stage 1: Collect responses
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
-            stage1_results = await stage1_collect_responses(request.content)
+            stage1_results = await stage1_collect_responses(request.content, models=council_models)
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 
             # Stage 2: Collect rankings
             yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
-            stage2_results, label_to_model = await stage2_collect_rankings(request.content, stage1_results)
+            stage2_results, label_to_model = await stage2_collect_rankings(request.content, stage1_results, models=council_models)
             aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
             yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
 
             # Stage 3: Synthesize final answer
             yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
-            stage3_result = await stage3_synthesize_final(request.content, stage1_results, stage2_results)
+            stage3_result = await stage3_synthesize_final(request.content, stage1_results, stage2_results, chairman_model=chairman_model)
             yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
 
             # Wait for title generation if it was started
@@ -192,6 +237,270 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             "Connection": "keep-alive",
         }
     )
+
+
+@app.get("/api/models")
+async def list_models():
+    """Fetch available models from OpenRouter."""
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                "https://openrouter.ai/api/v1/models",
+                headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"}
+            )
+            response.raise_for_status()
+            data = response.json()
+            return {
+                "models": [
+                    {
+                        "id": m["id"],
+                        "name": m.get("name", m["id"]),
+                        "description": m.get("description", ""),
+                        "context_length": m.get("context_length", 0),
+                        "pricing": m.get("pricing", {"prompt": "0", "completion": "0"}),
+                    }
+                    for m in data.get("data", [])
+                ]
+            }
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch models from OpenRouter: {str(e)}")
+
+
+@app.get("/api/config")
+async def get_config():
+    """Get the current council configuration."""
+    config = load_config()
+    return config
+
+
+@app.put("/api/config")
+async def update_config(request: UpdateConfigRequest):
+    """Update the global council configuration."""
+    config = load_config()
+    if request.council_models is not None:
+        config["council_models"] = request.council_models
+    if request.chairman_model is not None:
+        config["chairman_model"] = request.chairman_model
+    save_config(config)
+    return config
+
+
+@app.put("/api/conversations/{conversation_id}/models")
+async def update_conversation_models(conversation_id: str, request: UpdateConversationModelsRequest):
+    """Update the model configuration for a specific conversation."""
+    conversation = storage.get_conversation(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    storage.update_conversation_models(
+        conversation_id,
+        request.council_models,
+        request.chairman_model
+    )
+    return {
+        "council_models": request.council_models,
+        "chairman_model": request.chairman_model
+    }
+
+
+@app.delete("/api/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str):
+    """Delete a conversation."""
+    deleted = storage.delete_conversation(conversation_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"deleted": True}
+
+
+@app.put("/api/conversations/{conversation_id}/archive")
+async def archive_conversation(conversation_id: str, request: ArchiveConversationRequest):
+    """Archive or unarchive a conversation."""
+    try:
+        conversation = storage.archive_conversation(conversation_id, request.archived)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"id": conversation_id, "archived": request.archived}
+
+
+@app.get("/api/conversations/{conversation_id}/export")
+async def export_conversation(conversation_id: str, format: str = "markdown"):
+    """Export a conversation in the specified format."""
+    from fastapi.responses import Response
+
+    conversation = storage.get_conversation(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    if format == "json":
+        content = json.dumps(conversation, indent=2)
+        return Response(
+            content=content,
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{conversation_id}.json"'}
+        )
+
+    elif format == "markdown":
+        content = _conversation_to_markdown(conversation)
+        return Response(
+            content=content,
+            media_type="text/markdown",
+            headers={"Content-Disposition": f'attachment; filename="{conversation.get("title", "conversation").replace(" ", "_")}.md"'}
+        )
+
+    elif format == "pdf":
+        pdf_bytes = _conversation_to_pdf(conversation)
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{conversation.get("title", "conversation").replace(" ", "_")}.pdf"'}
+        )
+
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported format: {format}. Use markdown, json, or pdf.")
+
+
+def _conversation_to_markdown(conv: dict) -> str:
+    """Convert a conversation dict to markdown."""
+    lines = []
+    lines.append(f"# {conv.get('title', 'New Conversation')}")
+    lines.append(f"\n*Created: {conv.get('created_at', '')}*\n")
+
+    for msg in conv.get("messages", []):
+        if msg["role"] == "user":
+            lines.append("## You\n")
+            lines.append(msg["content"])
+            lines.append("")
+        elif msg["role"] == "assistant":
+            lines.append("## LLM Council\n")
+
+            if msg.get("stage1"):
+                lines.append("### Stage 1: Individual Responses\n")
+                for resp in msg["stage1"]:
+                    model = resp.get("model", "unknown")
+                    lines.append(f"**{model}**\n")
+                    lines.append(resp.get("response", ""))
+                    lines.append("---\n")
+
+            if msg.get("stage2"):
+                lines.append("### Stage 2: Peer Rankings\n")
+                for rank in msg["stage2"]:
+                    model = rank.get("model", "unknown")
+                    lines.append(f"**{model}**\n")
+                    lines.append(rank.get("ranking", ""))
+                    if rank.get("parsed_ranking"):
+                        lines.append(f"\n*Parsed ranking: {', '.join(rank['parsed_ranking'])}*\n")
+                    lines.append("---\n")
+
+            if msg.get("stage3"):
+                lines.append("### Stage 3: Final Council Answer\n")
+                model = msg["stage3"].get("model", "unknown")
+                lines.append(f"**Chairman: {model}**\n")
+                lines.append(msg["stage3"].get("response", ""))
+                lines.append("")
+
+    return "\n".join(lines)
+
+
+def _conversation_to_pdf(conv: dict) -> bytes:
+    """Convert a conversation dict to PDF using reportlab."""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
+    from reportlab.lib.units import inch
+    import io
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    styles = getSampleStyleSheet()
+
+    # Custom styles
+    styles.add(ParagraphStyle(
+        'ConvTitle',
+        parent=styles['Title'],
+        fontSize=18,
+        spaceAfter=12,
+    ))
+    styles.add(ParagraphStyle(
+        'StageHeader',
+        parent=styles['Heading2'],
+        fontSize=14,
+        spaceAfter=6,
+    ))
+    styles.add(ParagraphStyle(
+        'ModelName',
+        parent=styles['Heading3'],
+        fontSize=11,
+        spaceAfter=4,
+        textColor='#4a90e2',
+    ))
+    styles.add(ParagraphStyle(
+        'BodyWrap',
+        parent=styles['Normal'],
+        fontSize=10,
+        leading=14,
+        spaceAfter=8,
+    ))
+
+    story = []
+    story.append(Paragraph(conv.get('title', 'New Conversation'), styles['ConvTitle']))
+    story.append(Paragraph(f"Created: {conv.get('created_at', '')}", styles['Normal']))
+    story.append(Spacer(1, 0.3 * inch))
+
+    for msg in conv.get("messages", []):
+        if msg["role"] == "user":
+            story.append(Paragraph("You", styles['StageHeader']))
+            story.append(Paragraph(msg["content"][:2000], styles['BodyWrap']))
+            story.append(HRFlowable(width="80%", thickness=1, color='#e0e0e0'))
+            story.append(Spacer(1, 0.2 * inch))
+
+        elif msg["role"] == "assistant":
+            story.append(Paragraph("LLM Council", styles['StageHeader']))
+
+            if msg.get("stage1"):
+                story.append(Paragraph("Stage 1: Individual Responses", styles['StageHeader']))
+                for resp in msg["stage1"]:
+                    model = resp.get("model", "unknown")
+                    story.append(Paragraph(f"<b>{model}</b>", styles['ModelName']))
+                    text = resp.get("response", "")[:3000]
+                    story.append(Paragraph(text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")[:2000], styles['BodyWrap']))
+                    story.append(HRFlowable(width="60%", thickness=0.5, color='#e0e0e0'))
+
+            if msg.get("stage3"):
+                story.append(Paragraph("Stage 3: Final Council Answer", styles['StageHeader']))
+                model = msg["stage3"].get("model", "unknown")
+                story.append(Paragraph(f"<b>Chairman: {model}</b>", styles['ModelName']))
+                text = msg["stage3"].get("response", "")[:3000]
+                story.append(Paragraph(text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")[:2000], styles['BodyWrap']))
+
+            story.append(Spacer(1, 0.3 * inch))
+
+    doc.build(story)
+    return buffer.getvalue()
+
+
+@app.get("/api/presets")
+async def list_presets():
+    """List all saved presets."""
+    return presets.list_presets()
+
+
+@app.post("/api/presets")
+async def save_preset_endpoint(request: SavePresetRequest):
+    """Save a new preset."""
+    return presets.save_preset(
+        name=request.name,
+        council_models=request.council_models,
+        chairman_model=request.chairman_model
+    )
+
+
+@app.delete("/api/presets/{preset_id}")
+async def delete_preset(preset_id: str):
+    """Delete a preset."""
+    deleted = presets.delete_preset(preset_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Preset not found")
+    return {"deleted": True}
 
 
 if __name__ == "__main__":

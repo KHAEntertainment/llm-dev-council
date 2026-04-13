@@ -10,10 +10,77 @@ function App() {
   const [currentConversation, setCurrentConversation] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Load conversations on mount
+  // Per-conversation model config state
+  const [councilModels, setCouncilModels] = useState([]);
+  const [chairmanModel, setChairmanModel] = useState('');
+
+  // Default config from server
+  const [defaultConfig, setDefaultConfig] = useState(null);
+
+  // Model pricing data (id -> {prompt, completion} per token)
+  const [modelPricing, setModelPricing] = useState({});
+
+  // Archive view state
+  const [showArchived, setShowArchived] = useState(false);
+
+  // Dark mode state
+  const [darkMode, setDarkMode] = useState(() => {
+    const saved = localStorage.getItem('llm-council-dark-mode');
+    return saved === 'true';
+  });
+
+  // Apply dark mode class to root element
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', darkMode);
+    localStorage.setItem('llm-council-dark-mode', String(darkMode));
+  }, [darkMode]);
+
+  const handleToggleDarkMode = () => {
+    setDarkMode((prev) => !prev);
+  };
+
+  const handleToggleArchived = () => {
+    setShowArchived((prev) => !prev);
+  };
+
+  // Reload conversations when archive toggle changes
   useEffect(() => {
     loadConversations();
+  }, [showArchived]);
+
+  // Load conversations and default config on mount
+  useEffect(() => {
+    loadConversations();
+    loadDefaultConfig();
+    loadModelPricing();
   }, []);
+
+  const loadModelPricing = async () => {
+    try {
+      const data = await api.listModels();
+      const pricing = {};
+      (data.models || []).forEach(m => {
+        pricing[m.id] = m.pricing;
+      });
+      setModelPricing(pricing);
+    } catch (error) {
+      console.error('Failed to load model pricing:', error);
+    }
+  };
+
+  const loadDefaultConfig = async () => {
+    try {
+      const config = await api.getConfig();
+      setDefaultConfig(config);
+      // If no conversation is selected, use defaults
+      if (!currentConversationId) {
+        setCouncilModels(config.council_models || []);
+        setChairmanModel(config.chairman_model || '');
+      }
+    } catch (error) {
+      console.error('Failed to load default config:', error);
+    }
+  };
 
   // Load conversation details when selected
   useEffect(() => {
@@ -24,7 +91,7 @@ function App() {
 
   const loadConversations = async () => {
     try {
-      const convs = await api.listConversations();
+      const convs = await api.listConversations(showArchived);
       setConversations(convs);
     } catch (error) {
       console.error('Failed to load conversations:', error);
@@ -35,6 +102,11 @@ function App() {
     try {
       const conv = await api.getConversation(id);
       setCurrentConversation(conv);
+      // Load this conversation's model config
+      const models = conv.council_models || defaultConfig?.council_models || [];
+      const chairman = conv.chairman_model || defaultConfig?.chairman_model || '';
+      setCouncilModels(models);
+      setChairmanModel(chairman);
     } catch (error) {
       console.error('Failed to load conversation:', error);
     }
@@ -42,9 +114,12 @@ function App() {
 
   const handleNewConversation = async () => {
     try {
-      const newConv = await api.createConversation();
+      // Use current model config for the new conversation
+      const models = councilModels.length > 0 ? councilModels : (defaultConfig?.council_models || null);
+      const chairman = chairmanModel || (defaultConfig?.chairman_model || null);
+      const newConv = await api.createConversation(models, chairman);
       setConversations([
-        { id: newConv.id, created_at: newConv.created_at, message_count: 0 },
+        { id: newConv.id, created_at: newConv.created_at, message_count: 0, title: 'New Conversation' },
         ...conversations,
       ]);
       setCurrentConversationId(newConv.id);
@@ -55,6 +130,20 @@ function App() {
 
   const handleSelectConversation = (id) => {
     setCurrentConversationId(id);
+  };
+
+  const handleModelsChange = async (newModels, newChairman) => {
+    setCouncilModels(newModels);
+    setChairmanModel(newChairman);
+
+    // If we have a current conversation, update its model config on the server
+    if (currentConversationId && newModels.length > 0 && newChairman) {
+      try {
+        await api.updateConversationModels(currentConversationId, newModels, newChairman);
+      } catch (error) {
+        console.error('Failed to update conversation models:', error);
+      }
+    }
   };
 
   const handleSendMessage = async (content) => {
@@ -188,11 +277,20 @@ function App() {
         currentConversationId={currentConversationId}
         onSelectConversation={handleSelectConversation}
         onNewConversation={handleNewConversation}
+        darkMode={darkMode}
+        onToggleDarkMode={handleToggleDarkMode}
+        showArchived={showArchived}
+        onToggleArchived={handleToggleArchived}
+        onConversationsChanged={loadConversations}
       />
       <ChatInterface
         conversation={currentConversation}
         onSendMessage={handleSendMessage}
         isLoading={isLoading}
+        councilModels={councilModels}
+        chairmanModel={chairmanModel}
+        onModelsChange={handleModelsChange}
+        modelPricing={modelPricing}
       />
     </div>
   );

@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "llm-council"
 version = "0.1.0"
@@ -10,4 +14,13 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "httpx>=0.27.0",
     "pydantic>=2.9.0",
+    "reportlab>=4.0.0",
+    "mcp>=1.24.0",
 ]
+
+[project.scripts]
+llm-council = "mcp_server:main"
+
+[tool.setuptools]
+py-modules = ["mcp_server"]
+packages = ["backend"]

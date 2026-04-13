@@ -6,10 +6,10 @@ const API_BASE = 'http://localhost:8001';
 
 export const api = {
   /**
-   * List all conversations.
+   * List conversations, optionally filtered by archive status.
    */
-  async listConversations() {
-    const response = await fetch(`${API_BASE}/api/conversations`);
+  async listConversations(archived = false) {
+    const response = await fetch(`${API_BASE}/api/conversations?archived=${archived}`);
     if (!response.ok) {
       throw new Error('Failed to list conversations');
     }
@@ -19,13 +19,17 @@ export const api = {
   /**
    * Create a new conversation.
    */
-  async createConversation() {
+  async createConversation(councilModels = null, chairmanModel = null) {
+    const body = {};
+    if (councilModels) body.council_models = councilModels;
+    if (chairmanModel) body.chairman_model = chairmanModel;
+
     const response = await fetch(`${API_BASE}/api/conversations`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({}),
+      body: JSON.stringify(body),
     });
     if (!response.ok) {
       throw new Error('Failed to create conversation');
@@ -68,10 +72,6 @@ export const api = {
 
   /**
    * Send a message and receive streaming updates.
-   * @param {string} conversationId - The conversation ID
-   * @param {string} content - The message content
-   * @param {function} onEvent - Callback function for each event: (eventType, data) => void
-   * @returns {Promise<void>}
    */
   async sendMessageStream(conversationId, content, onEvent) {
     const response = await fetch(
@@ -111,5 +111,169 @@ export const api = {
         }
       }
     }
+  },
+
+  /**
+   * Fetch available models from OpenRouter.
+   */
+  async listModels() {
+    const response = await fetch(`${API_BASE}/api/models`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch models');
+    }
+    return response.json();
+  },
+
+  /**
+   * Get the current global council configuration.
+   */
+  async getConfig() {
+    const response = await fetch(`${API_BASE}/api/config`);
+    if (!response.ok) {
+      throw new Error('Failed to get config');
+    }
+    return response.json();
+  },
+
+  /**
+   * Update the global council configuration.
+   */
+  async updateConfig(councilModels, chairmanModel) {
+    const body = {};
+    if (councilModels !== undefined) body.council_models = councilModels;
+    if (chairmanModel !== undefined) body.chairman_model = chairmanModel;
+
+    const response = await fetch(`${API_BASE}/api/config`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to update config');
+    }
+    return response.json();
+  },
+
+  /**
+   * Update a conversation's model configuration.
+   */
+  async updateConversationModels(conversationId, councilModels, chairmanModel) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/models`,
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          council_models: councilModels,
+          chairman_model: chairmanModel,
+        }),
+      }
+    );
+    if (!response.ok) {
+      throw new Error('Failed to update conversation models');
+    }
+    return response.json();
+  },
+
+  /**
+   * List all saved presets.
+   */
+  async listPresets() {
+    const response = await fetch(`${API_BASE}/api/presets`);
+    if (!response.ok) {
+      throw new Error('Failed to list presets');
+    }
+    return response.json();
+  },
+
+  /**
+   * Save a new preset.
+   */
+  async savePreset(name, councilModels, chairmanModel) {
+    const response = await fetch(`${API_BASE}/api/presets`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        name,
+        council_models: councilModels,
+        chairman_model: chairmanModel,
+      }),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to save preset');
+    }
+    return response.json();
+  },
+
+  /**
+   * Delete a preset.
+   */
+  async deletePreset(presetId) {
+    const response = await fetch(`${API_BASE}/api/presets/${presetId}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      throw new Error('Failed to delete preset');
+    }
+    return response.json();
+  },
+
+  /**
+   * Delete a conversation.
+   */
+  async deleteConversation(conversationId) {
+    const response = await fetch(`${API_BASE}/api/conversations/${conversationId}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      throw new Error('Failed to delete conversation');
+    }
+    return response.json();
+  },
+
+  /**
+   * Archive or unarchive a conversation.
+   */
+  async archiveConversation(conversationId, archived) {
+    const response = await fetch(`${API_BASE}/api/conversations/${conversationId}/archive`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ archived }),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to archive conversation');
+    }
+    return response.json();
+  },
+
+  /**
+   * Export a conversation and trigger a download.
+   */
+  async exportConversation(conversationId, format) {
+    const response = await fetch(`${API_BASE}/api/conversations/${conversationId}/export?format=${format}`);
+    if (!response.ok) {
+      throw new Error('Failed to export conversation');
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const filenameMatch = disposition.match(/filename="?([^"]+)"?/);
+    const filename = filenameMatch ? filenameMatch[1] : `conversation.${format === 'markdown' ? 'md' : format}`;
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   },
 };

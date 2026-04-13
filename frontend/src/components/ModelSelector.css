@@ -1,0 +1,251 @@
+.model-selector {
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border-primary);
+  background: var(--bg-tertiary);
+  transition: background 0.3s, border-color 0.3s;
+}
+
+.model-selector-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.model-selector-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.model-selector-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.clear-btn {
+  padding: 2px 10px;
+  background: none;
+  border: 1px solid var(--text-error);
+  border-radius: 12px;
+  color: var(--text-error);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+
+.clear-btn:hover:not(:disabled) {
+  background: var(--text-error);
+  color: #fff;
+}
+
+.clear-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.cost-toggle-btn {
+  padding: 2px 10px;
+  background: none;
+  border: 1px solid var(--border-secondary);
+  border-radius: 12px;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+
+.cost-toggle-btn:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.cost-toggle-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.cost-toggle-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.chip-cost {
+  font-size: 10px;
+  color: var(--text-paid);
+  font-family: monospace;
+  padding: 1px 4px;
+  background: var(--badge-paid-bg);
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.cost-summary {
+  margin-top: 8px;
+  padding: 6px 12px;
+  background: var(--badge-paid-bg);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-paid);
+  font-family: monospace;
+}
+
+.model-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px 4px 10px;
+  background: var(--bg-chip);
+  border: 1px solid var(--border-chip);
+  border-radius: 16px;
+  font-size: 13px;
+  transition: all 0.15s;
+}
+
+.model-chip:hover {
+  background: var(--bg-hover);
+}
+
+.chip-name {
+  font-weight: 500;
+  color: var(--text-chip);
+}
+
+.chip-id {
+  font-size: 11px;
+  color: var(--text-chip-id);
+  font-family: monospace;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: var(--chip-remove-bg);
+  color: var(--text-chip-remove);
+  border-radius: 50%;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  transition: all 0.15s;
+}
+
+.chip-remove:hover {
+  background: var(--chip-remove-hover-bg);
+  color: var(--text-primary);
+}
+
+.chip-remove:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.add-model-btn {
+  padding: 4px 14px;
+  background: var(--bg-card);
+  border: 1px dashed var(--accent);
+  border-radius: 16px;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.add-model-btn:hover:not(:disabled) {
+  background: var(--accent-light);
+  border-style: solid;
+}
+
+.add-model-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.model-chip.is-chairman {
+  border-color: var(--accent);
+  background: var(--active-bg);
+}
+
+.chip-chairman-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.chairman-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.chairman-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.chairman-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  background: var(--bg-chip);
+  border: 1px solid var(--border-chip);
+  border-radius: 16px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+  color: var(--text-chip);
+  font-family: inherit;
+}
+
+.chairman-chip:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+
+.chairman-chip:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.chairman-chip-name {
+  font-weight: 600;
+}
+
+.chairman-chip-id {
+  font-size: 11px;
+  color: var(--text-chip-id);
+  font-family: monospace;
+}
