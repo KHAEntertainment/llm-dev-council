@@ -2,6 +2,8 @@
 
 import json
 import os
+import tempfile
+import fcntl
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from pathlib import Path
@@ -65,13 +67,16 @@ def get_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
     if not os.path.exists(path):
         return None
 
-    with open(path, 'r') as f:
-        return json.load(f)
+    try:
+        with open(path, 'r') as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return None
 
 
 def save_conversation(conversation: Dict[str, Any]):
     """
-    Save a conversation to storage.
+    Save a conversation to storage atomically with file locking.
 
     Args:
         conversation: Conversation dict to save
@@ -79,8 +84,19 @@ def save_conversation(conversation: Dict[str, Any]):
     ensure_data_dir()
 
     path = get_conversation_path(conversation['id'])
-    with open(path, 'w') as f:
-        json.dump(conversation, f, indent=2)
+    lock_path = path + ".lock"
+
+    with open(lock_path, 'w') as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            tmp_path = path + ".tmp"
+            with open(tmp_path, 'w') as f:
+                json.dump(conversation, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def list_conversations(archived: bool = False) -> List[Dict[str, Any]]:

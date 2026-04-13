@@ -210,7 +210,7 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             if is_first_message:
                 title_task = asyncio.create_task(generate_conversation_title(request.content))
 
-            # Get per-conversation model config
+            # Get per-conversation model config (reuse conversation from outer scope)
             conv = storage.get_conversation(conversation_id)
             council_models = conv.get("council_models")
             chairman_model = conv.get("chairman_model")
@@ -287,7 +287,7 @@ async def list_models():
                 ]
             }
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch models from OpenRouter: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Failed to fetch models from OpenRouter: {str(e)}") from e
 
 
 @app.get("/api/config")
@@ -355,7 +355,9 @@ async def export_conversation(conversation_id: str, format: str = "markdown"):
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    if format == "json":
+    export_format = format
+
+    if export_format == "json":
         content = json.dumps(conversation, indent=2)
         return Response(
             content=content,
@@ -363,7 +365,7 @@ async def export_conversation(conversation_id: str, format: str = "markdown"):
             headers={"Content-Disposition": f'attachment; filename="{conversation_id}.json"'}
         )
 
-    elif format == "markdown":
+    elif export_format == "markdown":
         content = _conversation_to_markdown(conversation)
         return Response(
             content=content,
@@ -371,7 +373,7 @@ async def export_conversation(conversation_id: str, format: str = "markdown"):
             headers={"Content-Disposition": f'attachment; filename="{conversation.get("title", "conversation").replace(" ", "_")}.md"'}
         )
 
-    elif format == "pdf":
+    elif export_format == "pdf":
         pdf_bytes = _conversation_to_pdf(conversation)
         return Response(
             content=pdf_bytes,
@@ -380,7 +382,7 @@ async def export_conversation(conversation_id: str, format: str = "markdown"):
         )
 
     else:
-        raise HTTPException(status_code=400, detail=f"Unsupported format: {format}. Use markdown, json, or pdf.")
+        raise HTTPException(status_code=400, detail=f"Unsupported format: {export_format}. Use markdown, json, or pdf.")
 
 
 def _conversation_to_markdown(conv: dict) -> str:
@@ -473,7 +475,7 @@ def _conversation_to_pdf(conv: dict) -> bytes:
     for msg in conv.get("messages", []):
         if msg["role"] == "user":
             story.append(Paragraph("You", styles['StageHeader']))
-            story.append(Paragraph(msg["content"][:2000], styles['BodyWrap']))
+            story.append(Paragraph(msg["content"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")[:2000], styles['BodyWrap']))
             story.append(HRFlowable(width="80%", thickness=1, color='#e0e0e0'))
             story.append(Spacer(1, 0.2 * inch))
 
@@ -485,16 +487,16 @@ def _conversation_to_pdf(conv: dict) -> bytes:
                 for resp in msg["stage1"]:
                     model = resp.get("model", "unknown")
                     story.append(Paragraph(f"<b>{model}</b>", styles['ModelName']))
-                    text = resp.get("response", "")[:3000]
-                    story.append(Paragraph(text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")[:2000], styles['BodyWrap']))
+                    text = resp.get("response", "")[:2000]
+                    story.append(Paragraph(text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"), styles['BodyWrap']))
                     story.append(HRFlowable(width="60%", thickness=0.5, color='#e0e0e0'))
 
             if msg.get("stage3"):
                 story.append(Paragraph("Stage 3: Final Council Answer", styles['StageHeader']))
                 model = msg["stage3"].get("model", "unknown")
                 story.append(Paragraph(f"<b>Chairman: {model}</b>", styles['ModelName']))
-                text = msg["stage3"].get("response", "")[:3000]
-                story.append(Paragraph(text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")[:2000], styles['BodyWrap']))
+                text = msg["stage3"].get("response", "")[:2000]
+                story.append(Paragraph(text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"), styles['BodyWrap']))
 
             story.append(Spacer(1, 0.3 * inch))
 

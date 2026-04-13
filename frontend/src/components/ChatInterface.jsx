@@ -309,7 +309,7 @@ export default function ChatInterface({
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 disabled={isLoading}
-                rows={2}
+                rows={3}
               />
               <button
                 type="submit"
@@ -375,7 +375,7 @@ function RunCostSummary({ councilModels, chairmanModel, modelPricing }) {
         <span className="run-cost-toggle">{showDetails ? '▲' : '▼'}</span>
       </div>
       <div className="run-cost-total">
-        ~${totalPromptPer1M.toFixed(2)}M input / ${totalCompletionPer1M.toFixed(2)}M output per 1M tokens per run
+        ~${totalPromptPer1M.toFixed(2)} input / ${totalCompletionPer1M.toFixed(2)} output per 1M tokens per run
       </div>
       {showDetails && (
         <div className="run-cost-details">
@@ -383,7 +383,7 @@ function RunCostSummary({ councilModels, chairmanModel, modelPricing }) {
             <div key={c.id} className="run-cost-row">
               <span className="run-cost-model">{c.id}</span>
               <span className="run-cost-calls">{c.calls}x calls</span>
-              <span className="run-cost-pricing">${c.promptPer1M.toFixed(1)}M / ${c.completionPer1M.toFixed(1)}M</span>
+              <span className="run-cost-pricing">${c.promptPer1M.toFixed(2)} / ${c.completionPer1M.toFixed(2)}</span>
             </div>
           ))}
           <div className="run-cost-note">

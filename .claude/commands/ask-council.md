@@ -1,4 +1,3 @@
-```bash
 ---
 description: Consult the LLM Council for a second opinion on complex problems
 argument-hint:

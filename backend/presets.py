@@ -14,6 +14,10 @@ def _ensure_dir():
 
 
 def _get_path(preset_id: str) -> str:
+    """Get the file path for a preset, validating against path traversal."""
+    # Only allow alphanumeric + hyphen/underscore IDs to prevent path traversal
+    if not preset_id.replace("-", "").replace("_", "").isalnum():
+        raise ValueError(f"Invalid preset ID: {preset_id}")
     return os.path.join(PRESETS_DIR, f"{preset_id}.json")
 
 

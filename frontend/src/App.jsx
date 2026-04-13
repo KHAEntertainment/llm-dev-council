@@ -29,22 +29,6 @@ function App() {
   // Pending write proposals from chairman
   const [pendingWrites, setPendingWrites] = useState(null);
 
-  // Dark mode state
-  const [darkMode, setDarkMode] = useState(() => {
-    const saved = localStorage.getItem('llm-council-dark-mode');
-    return saved === 'true';
-  });
-
-  // Apply dark mode class to root element
-  useEffect(() => {
-    document.documentElement.classList.toggle('dark', darkMode);
-    localStorage.setItem('llm-council-dark-mode', String(darkMode));
-  }, [darkMode]);
-
-  const handleToggleDarkMode = () => {
-    setDarkMode((prev) => !prev);
-  };
-
   const handleToggleArchived = () => {
     setShowArchived((prev) => !prev);
   };
@@ -99,6 +83,11 @@ function App() {
     try {
       const convs = await api.listConversations(showArchived);
       setConversations(convs);
+      // Clear current conversation if it no longer exists in the list
+      if (currentConversationId && !convs.find(c => c.id === currentConversationId)) {
+        setCurrentConversationId(null);
+        setCurrentConversation(null);
+      }
     } catch (error) {
       console.error('Failed to load conversations:', error);
     }
@@ -315,8 +304,6 @@ function App() {
         currentConversationId={currentConversationId}
         onSelectConversation={handleSelectConversation}
         onNewConversation={handleNewConversation}
-        darkMode={darkMode}
-        onToggleDarkMode={handleToggleDarkMode}
         showArchived={showArchived}
         onToggleArchived={handleToggleArchived}
         onConversationsChanged={loadConversations}

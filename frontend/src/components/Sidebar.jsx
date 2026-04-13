@@ -7,8 +7,6 @@ export default function Sidebar({
   currentConversationId,
   onSelectConversation,
   onNewConversation,
-  darkMode,
-  onToggleDarkMode,
   showArchived,
   onToggleArchived,
   onConversationsChanged,
@@ -143,11 +141,6 @@ export default function Sidebar({
         )}
       </div>
 
-      <div className="sidebar-footer">
-        <button className="theme-toggle" onClick={onToggleDarkMode}>
-          {darkMode ? '☀ Light Mode' : '☾ Dark Mode'}
-        </button>
-      </div>
     </div>
   );
 }
