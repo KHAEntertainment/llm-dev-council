@@ -3,6 +3,30 @@
 from typing import List, Dict, Any, Tuple, Optional
 from .openrouter import query_models_parallel, query_model
 from .config import get_council_models, get_chairman_model
+from . import filesystem
+
+
+def _build_fs_context(mounted_paths: List[str] = None) -> str:
+    """Build a filesystem context summary for injection into prompts."""
+    if not mounted_paths:
+        return ""
+
+    lines = ["\n\n--- Mounted Filesystem Context ---"]
+    for path in mounted_paths:
+        try:
+            entries = filesystem.list_directory(path)
+            lines.append(f"\nFolder: {path}")
+            for entry in entries[:50]:
+                prefix = "[DIR] " if entry["type"] == "directory" else "      "
+                size_str = f" ({entry['size']} bytes)" if entry.get("size") else ""
+                lines.append(f"  {prefix}{entry['name']}{size_str}")
+            if len(entries) > 50:
+                lines.append(f"  ... and {len(entries) - 50} more entries")
+        except Exception:
+            lines.append(f"\nFolder: {path} (unable to read)")
+
+    lines.append("--- End Filesystem Context ---\n")
+    return "\n".join(lines)
 
 
 def format_user_message(content: str, attachments: List[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -56,19 +80,23 @@ def format_user_message(content: str, attachments: List[Dict[str, Any]] = None) 
     return {"role": "user", "content": message_content}
 
 
-async def stage1_collect_responses(user_query: str, models: Optional[List[str]] = None, attachments: List[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+async def stage1_collect_responses(user_query: str, models: Optional[List[str]] = None, attachments: List[Dict[str, Any]] = None, mounted_paths: List[str] = None) -> List[Dict[str, Any]]:
     """
     Stage 1: Collect individual responses from all council models.
 
     Args:
         user_query: The user's question
         models: Optional list of model IDs to use (defaults to config)
+        attachments: Optional file/image attachments
+        mounted_paths: Optional list of mounted folder paths for context
 
     Returns:
         List of dicts with 'model' and 'response' keys
     """
     council_models = models or get_council_models()
-    messages = [format_user_message(user_query, attachments)]
+    fs_context = _build_fs_context(mounted_paths)
+    query_with_context = user_query + fs_context if fs_context else user_query
+    messages = [format_user_message(query_with_context, attachments)]
 
     # Query all models in parallel
     responses = await query_models_parallel(council_models, messages)
@@ -89,7 +117,8 @@ async def stage2_collect_rankings(
     user_query: str,
     stage1_results: List[Dict[str, Any]],
     models: Optional[List[str]] = None,
-    attachments: List[Dict[str, Any]] = None
+    attachments: List[Dict[str, Any]] = None,
+    mounted_paths: List[str] = None
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """
     Stage 2: Each model ranks the anonymized responses.
@@ -173,7 +202,9 @@ async def stage3_synthesize_final(
     stage1_results: List[Dict[str, Any]],
     stage2_results: List[Dict[str, Any]],
     chairman_model: Optional[str] = None,
-    attachments: List[Dict[str, Any]] = None
+    attachments: List[Dict[str, Any]] = None,
+    mounted_paths: List[str] = None,
+    allow_writes: bool = False
 ) -> Dict[str, Any]:
     """
     Stage 3: Chairman synthesizes final response.
@@ -199,10 +230,27 @@ async def stage3_synthesize_final(
         for result in stage2_results
     ])
 
+    fs_context = _build_fs_context(mounted_paths)
+
+    write_instruction = ""
+    if allow_writes and mounted_paths:
+        write_instruction = """
+
+IMPORTANT - FILE WRITE CAPABILITY:
+You have the ability to propose file writes to the user's mounted directories. If the user's question involves creating, modifying, or generating files, you may include write proposals at the END of your response in the following JSON format:
+
+```proposed_writes
+[
+  {"path": "/absolute/path/to/file.ext", "content": "file content here", "description": "Brief description of what this file does"}
+]
+```
+
+Only propose writes that are directly relevant to the user's request. The user will review and approve each proposed write before it is executed."""
+
     chairman_prompt = f"""You are the Chairman of an LLM Council. Multiple AI models have provided responses to a user's question, and then ranked each other's responses.
 
 Original Question: {user_query}
-
+{fs_context}
 STAGE 1 - Individual Responses:
 {stage1_text}
 
@@ -213,7 +261,7 @@ Your task as Chairman is to synthesize all of this information into a single, co
 - The individual responses and their insights
 - The peer rankings and what they reveal about response quality
 - Any patterns of agreement or disagreement
-
+{write_instruction}
 Provide a clear, well-reasoned final answer that represents the council's collective wisdom:"""
 
     messages = [format_user_message(chairman_prompt, attachments)]
@@ -228,10 +276,34 @@ Provide a clear, well-reasoned final answer that represents the council's collec
             "response": "Error: Unable to generate final synthesis."
         }
 
-    return {
+    result = {
         "model": chairman,
         "response": response.get('content', '')
     }
+
+    # Parse proposed writes from chairman response
+    if allow_writes and mounted_paths:
+        proposed = _parse_proposed_writes(result["response"])
+        if proposed:
+            result["proposed_writes"] = proposed
+
+    return result
+
+
+def _parse_proposed_writes(response_text: str) -> List[Dict[str, Any]]:
+    """Extract proposed_writes JSON block from chairman response."""
+    import json
+    import re
+
+    match = re.search(r'```proposed_writes\s*\n(.*?)\n```', response_text, re.DOTALL)
+    if match:
+        try:
+            writes = json.loads(match.group(1))
+            if isinstance(writes, list):
+                return [w for w in writes if isinstance(w, dict) and 'path' in w and 'content' in w]
+        except json.JSONDecodeError:
+            pass
+    return []
 
 
 def parse_ranking_from_text(ranking_text: str) -> List[str]:
@@ -357,7 +429,9 @@ async def run_full_council(
     user_query: str,
     council_models: Optional[List[str]] = None,
     chairman_model: Optional[str] = None,
-    attachments: List[Dict[str, Any]] = None
+    attachments: List[Dict[str, Any]] = None,
+    mounted_paths: List[str] = None,
+    allow_writes: bool = False
 ) -> Tuple[List, List, Dict, Dict]:
     """
     Run the complete 3-stage council process.
@@ -372,7 +446,7 @@ async def run_full_council(
         Tuple of (stage1_results, stage2_results, stage3_result, metadata)
     """
     # Stage 1: Collect individual responses
-    stage1_results = await stage1_collect_responses(user_query, models=council_models, attachments=attachments)
+    stage1_results = await stage1_collect_responses(user_query, models=council_models, attachments=attachments, mounted_paths=mounted_paths)
 
     # If no models responded successfully, return error
     if not stage1_results:
@@ -383,7 +457,7 @@ async def run_full_council(
 
     # Stage 2: Collect rankings
     stage2_results, label_to_model = await stage2_collect_rankings(
-        user_query, stage1_results, models=council_models, attachments=attachments
+        user_query, stage1_results, models=council_models, attachments=attachments, mounted_paths=mounted_paths
     )
 
     # Calculate aggregate rankings
@@ -395,7 +469,9 @@ async def run_full_council(
         stage1_results,
         stage2_results,
         chairman_model=chairman_model,
-        attachments=attachments
+        attachments=attachments,
+        mounted_paths=mounted_paths,
+        allow_writes=allow_writes
     )
 
     # Prepare metadata

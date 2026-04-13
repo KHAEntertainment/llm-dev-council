@@ -39,6 +39,7 @@ def create_conversation(conversation_id: str, council_models: list = None, chair
         "messages": [],
         "council_models": council_models,
         "chairman_model": chairman_model,
+        "mounted_paths": [],
     }
 
     # Save to file
@@ -200,6 +201,22 @@ def update_conversation_models(conversation_id: str, council_models: list, chair
 
     conversation["council_models"] = council_models
     conversation["chairman_model"] = chairman_model
+    save_conversation(conversation)
+
+
+def update_conversation_mounts(conversation_id: str, mounted_paths: list):
+    """
+    Update the mounted folder paths for a conversation.
+
+    Args:
+        conversation_id: Conversation identifier
+        mounted_paths: List of absolute folder paths
+    """
+    conversation = get_conversation(conversation_id)
+    if conversation is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+
+    conversation["mounted_paths"] = mounted_paths
     save_conversation(conversation)
 
 

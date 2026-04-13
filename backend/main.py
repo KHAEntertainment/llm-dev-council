@@ -12,6 +12,7 @@ import httpx
 
 from . import storage
 from . import presets
+from . import filesystem
 from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings
 from .config import load_config, save_config, get_council_models, get_chairman_model, OPENROUTER_API_KEY
 
@@ -36,6 +37,8 @@ class CreateConversationRequest(BaseModel):
 class SendMessageRequest(BaseModel):
     """Request to send a message in a conversation."""
     content: str
+    attachments: Optional[List[Dict[str, Any]]] = None
+    allow_writes: bool = False
 
 
 class UpdateConfigRequest(BaseModel):
@@ -60,6 +63,22 @@ class SavePresetRequest(BaseModel):
 class ArchiveConversationRequest(BaseModel):
     """Request to archive/unarchive a conversation."""
     archived: bool
+
+
+class MountFolderRequest(BaseModel):
+    """Request to mount a folder."""
+    path: str
+
+
+class WriteFileRequest(BaseModel):
+    """Request to write a file (chairman only)."""
+    path: str
+    content: str
+
+
+class UpdateMountsRequest(BaseModel):
+    """Request to update conversation mounts."""
+    mounted_paths: List[str]
 
 
 class ConversationMetadata(BaseModel):
@@ -138,12 +157,16 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
     # Get per-conversation model config
     council_models = conversation.get("council_models")
     chairman_model = conversation.get("chairman_model")
+    mounted_paths = conversation.get("mounted_paths", [])
 
     # Run the 3-stage council process
     stage1_results, stage2_results, stage3_result, metadata = await run_full_council(
         request.content,
         council_models=council_models,
-        chairman_model=chairman_model
+        chairman_model=chairman_model,
+        attachments=request.attachments,
+        mounted_paths=mounted_paths if mounted_paths else None,
+        allow_writes=request.allow_writes
     )
 
     # Add assistant message with all stages
@@ -191,21 +214,22 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             conv = storage.get_conversation(conversation_id)
             council_models = conv.get("council_models")
             chairman_model = conv.get("chairman_model")
+            mounted_paths = conv.get("mounted_paths", [])
 
             # Stage 1: Collect responses
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
-            stage1_results = await stage1_collect_responses(request.content, models=council_models)
+            stage1_results = await stage1_collect_responses(request.content, models=council_models, attachments=request.attachments, mounted_paths=mounted_paths if mounted_paths else None)
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 
             # Stage 2: Collect rankings
             yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
-            stage2_results, label_to_model = await stage2_collect_rankings(request.content, stage1_results, models=council_models)
+            stage2_results, label_to_model = await stage2_collect_rankings(request.content, stage1_results, models=council_models, attachments=request.attachments, mounted_paths=mounted_paths if mounted_paths else None)
             aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
             yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
 
             # Stage 3: Synthesize final answer
             yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
-            stage3_result = await stage3_synthesize_final(request.content, stage1_results, stage2_results, chairman_model=chairman_model)
+            stage3_result = await stage3_synthesize_final(request.content, stage1_results, stage2_results, chairman_model=chairman_model, attachments=request.attachments, mounted_paths=mounted_paths if mounted_paths else None, allow_writes=request.allow_writes)
             yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
 
             # Wait for title generation if it was started
@@ -476,6 +500,90 @@ def _conversation_to_pdf(conv: dict) -> bytes:
 
     doc.build(story)
     return buffer.getvalue()
+
+
+# --- Filesystem endpoints ---
+
+@app.post("/api/fs/mount")
+async def mount_folder(request: MountFolderRequest):
+    """Mount a folder path on the host filesystem."""
+    try:
+        result = filesystem.mount_folder(request.path)
+        return result
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except NotADirectoryError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/fs/mount/{mount_id}")
+async def unmount_folder(mount_id: str):
+    """Unmount a folder."""
+    if not filesystem.unmount_folder(mount_id):
+        raise HTTPException(status_code=404, detail="Mount not found")
+    return {"unmounted": True}
+
+
+@app.get("/api/fs/mounts")
+async def list_mounts():
+    """List all current mounts."""
+    return filesystem.list_mounts()
+
+
+@app.get("/api/fs/browse")
+async def browse_directory(path: str):
+    """Browse a directory within mounted paths."""
+    try:
+        return filesystem.list_directory(path)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/api/fs/read")
+async def read_file(path: str):
+    """Read a file from within mounted paths."""
+    try:
+        return filesystem.read_file(path)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=413, detail=str(e))
+
+
+@app.get("/api/fs/search")
+async def search_files(path: str, pattern: str):
+    """Search for files matching a glob pattern within mounted paths."""
+    try:
+        return filesystem.search_files(path, pattern)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+
+@app.post("/api/fs/write")
+async def write_file(request: WriteFileRequest):
+    """Write a file to disk. Chairman-only operation requiring user approval."""
+    try:
+        return filesystem.write_file(request.path, request.content)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/conversations/{conversation_id}/mounts")
+async def update_conversation_mounts(conversation_id: str, request: UpdateMountsRequest):
+    """Update the mounted paths for a conversation."""
+    conversation = storage.get_conversation(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    storage.update_conversation_mounts(conversation_id, request.mounted_paths)
+    # Restore mounts in the filesystem module
+    filesystem.restore_mounts(request.mounted_paths)
+    return {"mounted_paths": request.mounted_paths}
 
 
 @app.get("/api/presets")
