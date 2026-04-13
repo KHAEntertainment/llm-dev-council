@@ -10,7 +10,7 @@ mcp = FastMCP("LLM Council")
 
 
 @mcp.tool()
-async def consult_council(query: str, files: list[str] = []) -> str:
+async def consult_council(query: str, files: list[str] | None = None) -> str:
     """
     Ask the LLM Council for a fresh perspective on a problem.
 
@@ -40,7 +40,7 @@ async def consult_council(query: str, files: list[str] = []) -> str:
     """
     # Adapt file contents to 'attachments' format
     attachments = []
-    for i, file_content in enumerate(files):
+    for i, file_content in enumerate(files or []):
         attachments.append({
             "type": "file",
             "mimeType": "text/plain",
@@ -76,6 +76,8 @@ async def consult_council(query: str, files: list[str] = []) -> str:
         parsed = evaluation.get("parsed_ranking", [])
         if parsed:
             output.append(f"- **{model_name}**: {' > '.join(parsed)}")
+        else:
+            output.append(f"- **{model_name}**: (ranking could not be parsed)")
     output.append("")
 
     # Aggregate rankings

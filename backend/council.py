@@ -29,9 +29,9 @@ def _build_fs_context(mounted_paths: List[str] = None) -> str:
     return "\n".join(lines)
 
 
-def format_user_message(content: str, attachments: List[Dict[str, Any]] = None) -> Dict[str, Any]:
+def format_user_message(content: str, attachments: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Format user message with optional attachments for multimodal queries."""
-    if not attachments:
+    if attachments is None or len(attachments) == 0:
         return {"role": "user", "content": content}
 
     message_content = [{"type": "text", "text": content}]
@@ -80,7 +80,7 @@ def format_user_message(content: str, attachments: List[Dict[str, Any]] = None) 
     return {"role": "user", "content": message_content}
 
 
-async def stage1_collect_responses(user_query: str, models: Optional[List[str]] = None, attachments: List[Dict[str, Any]] = None, mounted_paths: List[str] = None) -> List[Dict[str, Any]]:
+async def stage1_collect_responses(user_query: str, models: Optional[List[str]] = None, attachments: Optional[List[Dict[str, Any]]] = None, mounted_paths: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     """
     Stage 1: Collect individual responses from all council models.
 
@@ -93,7 +93,7 @@ async def stage1_collect_responses(user_query: str, models: Optional[List[str]] 
     Returns:
         List of dicts with 'model' and 'response' keys
     """
-    council_models = models or get_council_models()
+    council_models = models if models is not None else get_council_models()
     fs_context = _build_fs_context(mounted_paths)
     query_with_context = user_query + fs_context if fs_context else user_query
     messages = [format_user_message(query_with_context, attachments)]
@@ -117,8 +117,8 @@ async def stage2_collect_rankings(
     user_query: str,
     stage1_results: List[Dict[str, Any]],
     models: Optional[List[str]] = None,
-    attachments: List[Dict[str, Any]] = None,
-    mounted_paths: List[str] = None
+    attachments: Optional[List[Dict[str, Any]]] = None,
+    mounted_paths: Optional[List[str]] = None
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """
     Stage 2: Each model ranks the anonymized responses.
@@ -179,7 +179,7 @@ Now provide your evaluation and ranking:"""
     messages = [format_user_message(ranking_prompt, attachments)]
 
     # Get rankings from all council models in parallel
-    council_models = models or get_council_models()
+    council_models = models if models is not None else get_council_models()
     responses = await query_models_parallel(council_models, messages)
 
     # Format results
@@ -202,8 +202,8 @@ async def stage3_synthesize_final(
     stage1_results: List[Dict[str, Any]],
     stage2_results: List[Dict[str, Any]],
     chairman_model: Optional[str] = None,
-    attachments: List[Dict[str, Any]] = None,
-    mounted_paths: List[str] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
+    mounted_paths: Optional[List[str]] = None,
     allow_writes: bool = False
 ) -> Dict[str, Any]:
     """
@@ -218,7 +218,7 @@ async def stage3_synthesize_final(
     Returns:
         Dict with 'model' and 'response' keys
     """
-    chairman = chairman_model or get_chairman_model()
+    chairman = chairman_model if chairman_model is not None else get_chairman_model()
     # Build comprehensive context for chairman
     stage1_text = "\n\n".join([
         f"Model: {result['model']}\nResponse: {result['response']}"
@@ -429,8 +429,8 @@ async def run_full_council(
     user_query: str,
     council_models: Optional[List[str]] = None,
     chairman_model: Optional[str] = None,
-    attachments: List[Dict[str, Any]] = None,
-    mounted_paths: List[str] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
+    mounted_paths: Optional[List[str]] = None,
     allow_writes: bool = False
 ) -> Tuple[List, List, Dict, Dict]:
     """

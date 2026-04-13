@@ -53,10 +53,23 @@ def load_config() -> dict:
 
 
 def save_config(config: dict) -> None:
-    """Save config to disk."""
+    """Save config to disk atomically (temp file + fsync + rename)."""
+    import tempfile
     _ensure_data_dir()
-    with open(CONFIG_PATH, 'w') as f:
-        json.dump(config, f, indent=2)
+    tmp_path = CONFIG_PATH + ".tmp"
+    try:
+        with open(tmp_path, 'w') as f:
+            json.dump(config, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, CONFIG_PATH)
+    except BaseException:
+        # Clean up temp file on any failure
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def get_council_models() -> list:

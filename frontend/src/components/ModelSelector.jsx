@@ -14,8 +14,8 @@ function getModelDisplayName(modelId) {
 function formatPricePer1M(pricePerToken) {
   const per1M = parseFloat(pricePerToken) * 1e6;
   if (per1M === 0) return 'Free';
-  if (per1M < 0.1) return '<$0.1M';
-  return '$' + per1M.toFixed(1) + 'M';
+  if (per1M < 0.1) return '<$0.10';
+  return '$' + per1M.toFixed(2);
 }
 
 export default function ModelSelector({
@@ -132,7 +132,7 @@ export default function ModelSelector({
 
       {showCosts && costSummary && (
         <div className="cost-summary">
-          <span>Combined: ${costSummary.promptPer1M}M input / ${costSummary.completionPer1M}M output per 1M tokens (all models + chairman)</span>
+          <span>Combined: ${costSummary.promptPer1M} input / ${costSummary.completionPer1M} output per 1M tokens (all models + chairman)</span>
         </div>
       )}
 

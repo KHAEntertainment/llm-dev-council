@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { api } from '../api';
 import './ModelBrowserModal.css';
 
 const SORT_OPTIONS = [
@@ -39,9 +40,7 @@ export default function ModelBrowserModal({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('http://localhost:8001/api/models');
-      if (!res.ok) throw new Error('Failed to fetch models');
-      const data = await res.json();
+      const data = await api.listModels();
       setModels(data.models || []);
     } catch (err) {
       setError(err.message);
@@ -187,7 +186,7 @@ export default function ModelBrowserModal({
                       <span>Context: {(model.context_length || 0).toLocaleString()}</span>
                       {!isFree && (
                         <span>
-                          {'$' + (parseFloat(model.pricing?.prompt || '0') * 1e6).toFixed(1) + 'M / $' + (parseFloat(model.pricing?.completion || '0') * 1e6).toFixed(1) + 'M per 1M tokens'}
+                          {'$' + (parseFloat(model.pricing?.prompt || '0') * 1e6).toFixed(2) + ' / $' + (parseFloat(model.pricing?.completion || '0') * 1e6).toFixed(2) + ' per 1M tokens'}
                         </span>
                       )}
                     </div>

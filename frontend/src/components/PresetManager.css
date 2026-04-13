@@ -121,6 +121,13 @@
   align-items: center;
   justify-content: space-between;
   min-width: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: left;
 }
 
 .preset-item-name {
@@ -157,6 +164,6 @@
 }
 
 .preset-item-delete:hover {
-  background: #f04040;
-  color: #fff;
+  background: var(--text-error);
+  color: var(--bg-card);
 }

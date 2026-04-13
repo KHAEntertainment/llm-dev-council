@@ -13,6 +13,7 @@ Requires the FastAPI backend to be running on localhost:8001.
 
 import argparse
 import sys
+import os
 import json
 import httpx
 from typing import Optional
@@ -49,14 +50,34 @@ def main():
     payload = {"content": args.query}
 
     if args.files:
-        print(f"Note: {len(args.files)} files specified. File attachments are supported via MCP mode (consult_council tool) or the web UI.", file=sys.stderr)
+        import base64
+        import mimetypes
+        attachments = []
+        for filepath in args.files:
+            try:
+                with open(filepath, 'rb') as f:
+                    file_data = base64.b64encode(f.read()).decode('utf-8')
+                mime_type = mimetypes.guess_type(filepath)[0] or 'application/octet-stream'
+                is_image = mime_type.startswith('image/')
+                attachments.append({
+                    "filename": os.path.basename(filepath),
+                    "mimeType": mime_type,
+                    "data": f"data:{mime_type};base64,{file_data}",
+                    "type": "image" if is_image else "file",
+                })
+            except FileNotFoundError:
+                print(f"Warning: File not found: {filepath}", file=sys.stderr)
+            except IOError as e:
+                print(f"Warning: Could not read file {filepath}: {e}", file=sys.stderr)
+        if attachments:
+            payload["attachments"] = attachments
 
     print("\n--- Consulting the Council ---\n")
 
     try:
         url = f"{API_BASE}/conversations/{conversation_id}/message/stream"
 
-        with httpx.stream("POST", url, json=payload, timeout=None) as response:
+        with httpx.stream("POST", url, json=payload, timeout=180.0) as response:
             response.raise_for_status()
 
             for line in response.iter_lines():

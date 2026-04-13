@@ -93,12 +93,12 @@ export default function PresetManager({
         <div className="preset-list">
           {presets.map((preset) => (
             <div key={preset.id} className="preset-item">
-              <div className="preset-item-info" onClick={() => handleApply(preset)}>
+              <button className="preset-item-info" onClick={() => handleApply(preset)}>
                 <span className="preset-item-name">{preset.name}</span>
                 <span className="preset-item-meta">
                   {preset.council_models.length} models
                 </span>
-              </div>
+              </button>
               <button
                 className="preset-item-delete"
                 onClick={(e) => { e.stopPropagation(); handleDelete(preset.id); }}
