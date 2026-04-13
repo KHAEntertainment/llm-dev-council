@@ -34,10 +34,11 @@ cd ..
 
 ### 2. Configure API Key
 
-Create a `.env` file in the project root:
+Copy the template and add your key:
 
 ```bash
-OPENROUTER_API_KEY=sk-or-v1-...
+cp .env.template .env.local
+# Edit .env.local and add your OpenRouter API key
 ```
 
 Get your API key at [openrouter.ai](https://openrouter.ai/). Make sure to purchase the credits you need, or sign up for automatic top up.
@@ -79,9 +80,64 @@ npm run dev
 
 Then open http://localhost:5173 in your browser.
 
+## MCP Server (Claude Code Integration)
+
+The LLM Council can also be used as an MCP server, allowing Claude Code (or any MCP client) to invoke the council as a native tool. This runs the logic in stateless mode -- no running backend required.
+
+### Quick Install
+
+Add the council as an MCP server to Claude Code:
+
+```bash
+# Set your OpenRouter key (get one at openrouter.ai)
+claude mcp add llm-council \
+  -e OPENROUTER_API_KEY="$(cat .env.local | grep OPENROUTER | cut -d= -f2)" \
+  -- uvx --from git+https://github.com/YOUR-ORG/llm-dev-council.git \
+  llm-council \
+  --council-models "openai/gpt-5.1,google/gemini-3-pro-preview,anthropic/claude-sonnet-4.5,x-ai/grok-4" \
+  --chairman-model "google/gemini-3-pro-preview"
+```
+
+Or for local development (runs from source):
+
+```bash
+claude mcp add llm-council \
+  -e OPENROUTER_API_KEY="$(cat .env.local | grep OPENROUTER | cut -d= -f2)" \
+  -- uv run python mcp_server.py \
+  --council-models "openai/gpt-5.1,google/gemini-3-pro-preview" \
+  --chairman-model "google/gemini-3-pro-preview"
+```
+
+### MCP Tool: `consult_council`
+
+The server exposes a single tool:
+
+- **`consult_council(query, files?)`** -- Runs the 3-stage council process and returns a structured Markdown response with all stages and the Chairman's Verdict.
+
+The `files` parameter accepts a list of file contents (strings) to provide as context. The MCP tool handles base64 encoding automatically.
+
+### CLI Integration
+
+For use with Claude Code slash commands or standalone CLI:
+
+```bash
+python3 scripts/council_cli.py "Why is this code failing?" --files src/main.py src/utils.py
+```
+
+This requires the web app backend to be running locally (Mode 1). See `docs/architecture-mcp.md` for details.
+
+## Usage Modes
+
+| Mode | Description | Requires |
+|------|-------------|----------|
+| **Web App** | Full browser UI with conversation history | `./start.sh` |
+| **MCP Server** | Native tool in Claude Code or any MCP client | `claude mcp add` |
+| **CLI / Slash Command** | Command-line interface or Claude Code slash command | Running backend |
+
 ## Tech Stack
 
 - **Backend:** FastAPI (Python 3.10+), async httpx, OpenRouter API
 - **Frontend:** React + Vite, react-markdown for rendering
+- **MCP:** Model Context Protocol (FastMCP)
 - **Storage:** JSON files in `data/conversations/`
 - **Package Management:** uv for Python, npm for JavaScript

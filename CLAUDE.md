@@ -11,8 +11,10 @@ LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively
 ### Backend Structure (`backend/`)
 
 **`config.py`**
-- Contains `COUNCIL_MODELS` (list of OpenRouter model identifiers)
-- Contains `CHAIRMAN_MODEL` (model that synthesizes final answer)
+- Contains `DEFAULT_COUNCIL_MODELS` and `DEFAULT_CHAIRMAN_MODEL` as fallbacks
+- `get_council_models()` / `get_chairman_model()`: priority chain: env var > file config > defaults
+- Env vars `COUNCIL_MODELS` (comma-separated) and `CHAIRMAN_MODEL` set by MCP CLI args
+- File config persisted in `data/config.json` via `load_config()` / `save_config()`
 - Uses environment variable `OPENROUTER_API_KEY` from `.env`
 - Backend runs on **port 8001** (NOT 8000 - user had another app on 8000)
 
@@ -21,9 +23,12 @@ LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively
 - `query_models_parallel()`: Parallel queries using `asyncio.gather()`
 - Returns dict with 'content' and optional 'reasoning_details'
 - Graceful degradation: returns None on failure, continues with successful responses
+- Message content can be str or multimodal list (for file/image attachments)
+- Sends `HTTP-Referer` and `X-Title` headers for OpenRouter ranking credit
 
 **`council.py`** - The Core Logic
-- `stage1_collect_responses()`: Parallel queries to all council models
+- `format_user_message(content, attachments)`: Builds multimodal message dict (text + files/images)
+- `stage1_collect_responses()`: Parallel queries to all council models, optional `attachments` param
 - `stage2_collect_rankings()`:
   - Anonymizes responses as "Response A, B, C, etc."
   - Creates `label_to_model` mapping for de-anonymization
@@ -44,6 +49,27 @@ LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively
 - FastAPI app with CORS enabled for localhost:5173 and localhost:3000
 - POST `/api/conversations/{id}/message` returns metadata in addition to stages
 - Metadata includes: label_to_model mapping and aggregate_rankings
+- Streaming endpoint at POST `/api/conversations/{id}/message/stream` (SSE)
+- Model browser at GET `/api/models` (proxies OpenRouter)
+- Config endpoints at GET/PUT `/api/config`
+- Per-conversation model override at PUT `/api/conversations/{id}/models`
+- Preset management at GET/POST/DELETE `/api/presets`
+- Archive at PUT `/api/conversations/{id}/archive`
+- Export at GET `/api/conversations/{id}/export?format=markdown|json|pdf`
+
+**`mcp.py`** (MCP Server Surface)
+- FastMCP server exposing `consult_council` tool
+- Accepts `query` (str) and `files` (list[str]) parameters
+- Adapts file strings to base64-encoded attachment dicts
+- Calls `run_full_council(query, attachments=attachments)` in stateless mode
+- Returns structured Markdown with Stage 1/2/3 results
+- Used by `mcp_server.py` entry point; not involved in web app path
+
+**`mcp_server.py`** (Project Root)
+- Entry point for MCP server mode (uvx / claude mcp add)
+- Parses `--council-models` and `--chairman-model` CLI args
+- Injects them as `COUNCIL_MODELS` / `CHAIRMAN_MODEL` env vars before importing backend
+- Strips custom args from sys.argv so FastMCP doesn't choke on unknown flags
 
 ### Frontend Structure (`frontend/src/`)
 
@@ -124,6 +150,22 @@ All ReactMarkdown components must be wrapped in `<div className="markdown-conten
 
 ### Model Configuration
 Models are hardcoded in `backend/config.py`. Chairman can be same or different from council members. The current default is Gemini as chairman per user preference.
+
+## MCP Server Mode
+
+### How It Works
+The MCP server runs the council logic in stateless mode -- no conversation storage, no FastAPI. It uses the same `run_full_council()` function but passes file attachments for multimodal queries.
+
+### Configuration Flow
+1. `mcp_server.py` parses `--council-models` and `--chairman-model` CLI args
+2. Sets `COUNCIL_MODELS` and `CHAIRMAN_MODEL` env vars
+3. Imports `backend.mcp` which triggers `config.py` initialization
+4. `get_council_models()` / `get_chairman_model()` read env vars first (MCP override), then file config, then defaults
+
+### Key Difference from Web App
+- Web app: models configured via UI → saved to `data/config.json` → per-conversation overrides
+- MCP: models configured via CLI args → env vars → same defaults as fallback
+- MCP is single-turn stateless; web app is multi-turn with conversation history
 
 ## Common Gotchas
 
