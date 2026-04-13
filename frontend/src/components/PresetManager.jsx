@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
 import './PresetManager.css';
 
@@ -12,18 +12,18 @@ export default function PresetManager({
   const [showSaveInput, setShowSaveInput] = useState(false);
   const [presetName, setPresetName] = useState('');
 
-  useEffect(() => {
-    loadPresets();
-  }, []);
-
-  const loadPresets = async () => {
+  const loadPresets = useCallback(async () => {
     try {
       const data = await api.listPresets();
       setPresets(data);
     } catch (err) {
       console.error('Failed to load presets:', err);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    loadPresets();
+  }, [loadPresets]);
 
   const handleSave = async () => {
     if (!presetName.trim() || councilModels.length === 0 || !chairmanModel) return;
@@ -93,7 +93,7 @@ export default function PresetManager({
         <div className="preset-list">
           {presets.map((preset) => (
             <div key={preset.id} className="preset-item">
-              <button className="preset-item-info" onClick={() => handleApply(preset)}>
+              <button className="preset-item-info" onClick={() => handleApply(preset)} disabled={disabled}>
                 <span className="preset-item-name">{preset.name}</span>
                 <span className="preset-item-meta">
                   {preset.council_models.length} models

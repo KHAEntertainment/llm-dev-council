@@ -96,7 +96,13 @@ export default function Sidebar({
                   {conv.message_count} messages
                 </div>
               </div>
-              <div className="conversation-item-actions" ref={openMenuId === conv.id ? menuRef : null}>
+              <div className="conversation-item-actions" ref={(node) => {
+                if (openMenuId === conv.id) {
+                  menuRef.current = node;
+                } else if (menuRef.current && openMenuId !== conv.id) {
+                  menuRef.current = null;
+                }
+              }}>
                 <button
                   className="menu-btn"
                   onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === conv.id ? null : conv.id); setConfirmDeleteId(null); }}

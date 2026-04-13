@@ -180,7 +180,27 @@ def write_file(path: str, content: str) -> Dict[str, Any]:
 
 def restore_mounts(paths: List[str]) -> List[Dict[str, Any]]:
     """Restore mounts from a list of paths (e.g., from conversation metadata).
-    Skips paths that no longer exist."""
+    Clears stale mounts not in the incoming paths, then re-adds. Skips paths that no longer exist."""
+    global _mounts
+
+    # Compute set of resolved paths we want to keep
+    desired_resolved = set()
+    for p in paths:
+        try:
+            resolved = os.path.realpath(os.path.expanduser(p))
+            desired_resolved.add(resolved)
+        except Exception:
+            continue
+
+    # Remove mounts not in the desired set
+    stale_ids = [
+        mid for mid, mount in _mounts.items()
+        if mount["path"] not in desired_resolved
+    ]
+    for mid in stale_ids:
+        del _mounts[mid]
+
+    # Re-add mounts for each path
     restored = []
     for p in paths:
         try:

@@ -62,11 +62,14 @@ function App() {
     try {
       const config = await api.getConfig();
       setDefaultConfig(config);
-      // If no conversation is selected, use defaults
-      if (!currentConversationId) {
-        setCouncilModels(config.council_models || []);
-        setChairmanModel(config.chairman_model || '');
-      }
+      // Use functional form to check live state, avoiding stale closure
+      setCurrentConversationId((liveId) => {
+        if (!liveId) {
+          setCouncilModels(config.council_models || []);
+          setChairmanModel(config.chairman_model || '');
+        }
+        return liveId; // don't change the id
+      });
     } catch (error) {
       console.error('Failed to load default config:', error);
     }
@@ -97,13 +100,25 @@ function App() {
     try {
       const conv = await api.getConversation(id);
       setCurrentConversation(conv);
-      // Load this conversation's model config
-      const models = conv.council_models || defaultConfig?.council_models || [];
-      const chairman = conv.chairman_model || defaultConfig?.chairman_model || '';
+      // Load this conversation's model config — use explicit null checks
+      const models = conv.council_models !== null && conv.council_models !== undefined
+        ? conv.council_models
+        : (defaultConfig?.council_models || []);
+      const chairman = conv.chairman_model !== null && conv.chairman_model !== undefined
+        ? conv.chairman_model
+        : (defaultConfig?.chairman_model || '');
       setCouncilModels(models);
       setChairmanModel(chairman);
-      // Load mounted paths
-      setMountedPaths(conv.mounted_paths || []);
+      // Load mounted paths and rehydrate backend mount registry
+      const paths = conv.mounted_paths || [];
+      setMountedPaths(paths);
+      if (paths.length > 0) {
+        try {
+          await api.updateConversationMounts(id, paths);
+        } catch (err) {
+          console.error('Failed to restore backend mounts:', err);
+        }
+      }
     } catch (error) {
       console.error('Failed to load conversation:', error);
     }
@@ -133,10 +148,11 @@ function App() {
     setCouncilModels(newModels);
     setChairmanModel(newChairman);
 
-    // If we have a current conversation, update its model config on the server
-    if (currentConversationId && newModels.length > 0 && newChairman) {
+    // If we have a current conversation, persist model override to server
+    // Allow explicit empty arrays/strings so clearing is distinguishable from defaults
+    if (currentConversationId) {
       try {
-        await api.updateConversationModels(currentConversationId, newModels, newChairman);
+        await api.updateConversationModels(currentConversationId, newModels, newChairman || '');
       } catch (error) {
         console.error('Failed to update conversation models:', error);
       }
@@ -182,6 +198,7 @@ function App() {
       }));
 
       // Create a partial assistant message that will be updated progressively
+      // Snapshot the run config so RunCostSummary uses the correct models/pricing
       const assistantMessage = {
         role: 'assistant',
         stage1: null,
@@ -192,6 +209,11 @@ function App() {
           stage1: false,
           stage2: false,
           stage3: false,
+        },
+        runConfig: {
+          councilModels: [...councilModels],
+          chairmanModel,
+          pricing: { ...modelPricing },
         },
       };
 

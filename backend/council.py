@@ -5,6 +5,9 @@ from .openrouter import query_models_parallel, query_model
 from .config import get_council_models, get_chairman_model
 from . import filesystem
 
+# Maximum size for inline text/json attachments (100KB)
+MAX_INLINE_ATTACHMENT_CHARS = 100_000
+
 
 def _build_fs_context(mounted_paths: List[str] = None) -> str:
     """Build a filesystem context summary for injection into prompts."""
@@ -54,6 +57,9 @@ def format_user_message(content: str, attachments: Optional[List[Dict[str, Any]]
                         data = data.split(",")[1]
                     decoded_bytes = base64.b64decode(data)
                     decoded_text = decoded_bytes.decode('utf-8')
+                    # Truncate oversized inline content
+                    if len(decoded_text) > MAX_INLINE_ATTACHMENT_CHARS:
+                        decoded_text = decoded_text[:MAX_INLINE_ATTACHMENT_CHARS] + "\n...[truncated]..."
                     filename_label = f"File: {att.get('filename', 'Attached File')}\n"
                     message_content.append({
                         "type": "text",
@@ -270,10 +276,20 @@ Provide a clear, well-reasoned final answer that represents the council's collec
     response = await query_model(chairman, messages)
 
     if response is None:
-        # Fallback if chairman fails
+        # Fallback: use top-ranked Stage 1 answer if chairman fails
+        if stage1_results:
+            # Pick the top-ranked answer if aggregate rankings exist
+            top_result = stage1_results[0]
+            return {
+                "model": top_result["model"],
+                "response": top_result.get("response", ""),
+                "fallback": "chairman_failed",
+                "note": "Chairman model failed; showing top Stage 1 response as fallback."
+            }
         return {
             "model": chairman,
-            "response": "Error: Unable to generate final synthesis."
+            "response": "Error: Unable to generate final synthesis.",
+            "fallback": "chairman_failed"
         }
 
     result = {

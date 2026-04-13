@@ -20,7 +20,7 @@ def get_conversation_path(conversation_id: str) -> str:
     return os.path.join(DATA_DIR, f"{conversation_id}.json")
 
 
-def create_conversation(conversation_id: str, council_models: list = None, chairman_model: str = None) -> Dict[str, Any]:
+def create_conversation(conversation_id: str, council_models: Optional[list] = None, chairman_model: Optional[str] = None) -> Dict[str, Any]:
     """
     Create a new conversation.
 
@@ -137,23 +137,28 @@ def list_conversations(archived: bool = False) -> List[Dict[str, Any]]:
     return conversations
 
 
-def add_user_message(conversation_id: str, content: str):
+def add_user_message(conversation_id: str, content: str, attachments: Optional[List[Dict[str, Any]]] = None):
     """
     Add a user message to a conversation.
 
     Args:
         conversation_id: Conversation identifier
         content: User message content
+        attachments: Optional list of attachment metadata dicts
     """
     conversation = get_conversation(conversation_id)
     if conversation is None:
         raise ValueError(f"Conversation {conversation_id} not found")
 
-    conversation["messages"].append({
-        "role": "user",
-        "content": content
-    })
+    message = {"role": "user", "content": content}
+    if attachments:
+        # Store lightweight metadata only (no base64 data)
+        message["attachments"] = [
+            {"filename": a.get("filename"), "mimeType": a.get("mimeType"), "type": a.get("type")}
+            for a in attachments
+        ]
 
+    conversation["messages"].append(message)
     save_conversation(conversation)
 
 
@@ -238,7 +243,7 @@ def update_conversation_mounts(conversation_id: str, mounted_paths: list):
 
 def delete_conversation(conversation_id: str) -> bool:
     """
-    Delete a conversation file.
+    Delete a conversation file and any associated lock file.
 
     Args:
         conversation_id: Conversation identifier
@@ -249,6 +254,13 @@ def delete_conversation(conversation_id: str) -> bool:
     path = get_conversation_path(conversation_id)
     if os.path.exists(path):
         os.remove(path)
+        # Clean up lock file if present
+        lock_path = path + ".lock"
+        try:
+            if os.path.exists(lock_path):
+                os.remove(lock_path)
+        except OSError:
+            pass
         return True
     return False
 
