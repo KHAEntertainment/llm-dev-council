@@ -77,7 +77,7 @@ def main():
     try:
         url = f"{API_BASE}/conversations/{conversation_id}/message/stream"
 
-        with httpx.stream("POST", url, json=payload, timeout=180.0) as response:
+        with httpx.stream("POST", url, json=payload, timeout=httpx.Timeout(connect=30.0, read=None, write=30.0, pool=30.0)) as response:
             response.raise_for_status()
 
             for line in response.iter_lines():

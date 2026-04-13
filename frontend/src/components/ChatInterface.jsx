@@ -186,11 +186,11 @@ export default function ChatInterface({
                   {msg.stage3 && <Stage3 finalResponse={msg.stage3} />}
 
                   {/* Run Cost Summary */}
-                  {msg.stage3 && modelPricing && councilModels.length > 0 && (
+                  {msg.stage3 && (msg.runConfig?.pricing || modelPricing) && (msg.runConfig?.councilModels || councilModels).length > 0 && (
                     <RunCostSummary
-                      councilModels={councilModels}
-                      chairmanModel={chairmanModel}
-                      modelPricing={modelPricing}
+                      councilModels={msg.runConfig?.councilModels || councilModels}
+                      chairmanModel={msg.runConfig?.chairmanModel || chairmanModel}
+                      modelPricing={msg.runConfig?.pricing || modelPricing}
                     />
                   )}
                 </div>

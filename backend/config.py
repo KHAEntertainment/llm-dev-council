@@ -54,7 +54,6 @@ def load_config() -> dict:
 
 def save_config(config: dict) -> None:
     """Save config to disk atomically (temp file + fsync + rename)."""
-    import tempfile
     _ensure_data_dir()
     tmp_path = CONFIG_PATH + ".tmp"
     try:

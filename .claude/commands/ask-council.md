@@ -96,7 +96,7 @@ If user asks: "Why is my login returning 422?"
 
 Construct query like:
 
-```
+```text
 "I am trying to fix the '422 Unprocessable Entity' error in the login flow.
 
 CONTEXT:

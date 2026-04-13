@@ -31,9 +31,9 @@ export default function FolderManager({ onMountsChange }) {
       await api.mountFolder(pathInput.trim());
       setPathInput('');
       setShowInput(false);
-      await loadMounts();
-      // Update parent with new paths
+      // Reload mounts and notify parent in one pass
       const updated = await api.listMounts();
+      setMounts(updated);
       if (onMountsChange) {
         onMountsChange(updated.map((m) => m.path));
       }
@@ -55,21 +55,24 @@ export default function FolderManager({ onMountsChange }) {
         if (confirmed && confirmed.trim()) {
           setPathInput(confirmed.trim());
         }
+        return true;
       } catch (err) {
         if (err.name !== 'AbortError') {
           console.error('Directory picker error:', err);
         }
+        return false;
       }
     } else {
-      setShowInput(true);
+      return false;
     }
   };
 
   const handleUnmount = async (mountId) => {
     try {
       await api.unmountFolder(mountId);
-      await loadMounts();
+      // Reload mounts and notify parent in one pass
       const updated = await api.listMounts();
+      setMounts(updated);
       if (onMountsChange) {
         onMountsChange(updated.map((m) => m.path));
       }
@@ -98,6 +101,11 @@ export default function FolderManager({ onMountsChange }) {
       api.browseDirectory(prev).then((entries) => {
         setBrowseEntries(entries);
         setBrowsing(prev);
+      }).catch((err) => {
+        console.error('Failed to browse back:', err);
+        setBrowsing(null);
+        setBrowseEntries([]);
+        setBrowseStack([]);
       });
     } else {
       setBrowsing(null);
@@ -129,11 +137,16 @@ export default function FolderManager({ onMountsChange }) {
         <span className="folder-manager-title">Mounted Folders</span>
         <button
           className="folder-mount-btn"
-          onClick={() => {
+          onClick={async () => {
             if (typeof window.showDirectoryPicker === 'function') {
-              handlePickFolder();
+              const picked = await handlePickFolder();
+              // Only show manual input if picker was cancelled/unavailable
+              if (!picked) {
+                setShowInput(true);
+              }
+            } else {
+              setShowInput(true);
             }
-            setShowInput(true);
           }}
           title="Mount a folder"
         >

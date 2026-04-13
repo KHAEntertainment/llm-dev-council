@@ -147,7 +147,7 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
     is_first_message = len(conversation["messages"]) == 0
 
     # Add user message
-    storage.add_user_message(conversation_id, request.content)
+    storage.add_user_message(conversation_id, request.content, attachments=request.attachments)
 
     # If this is the first message, generate a title
     if is_first_message:
@@ -203,7 +203,7 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
     async def event_generator():
         try:
             # Add user message
-            storage.add_user_message(conversation_id, request.content)
+            storage.add_user_message(conversation_id, request.content, attachments=request.attachments)
 
             # Start title generation in parallel (don't await yet)
             title_task = None
