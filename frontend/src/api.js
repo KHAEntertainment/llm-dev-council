@@ -53,7 +53,10 @@ export const api = {
   /**
    * Send a message in a conversation.
    */
-  async sendMessage(conversationId, content) {
+  async sendMessage(conversationId, content, attachments = null) {
+    const body = { content };
+    if (attachments && attachments.length > 0) body.attachments = attachments;
+
     const response = await fetch(
       `${API_BASE}/api/conversations/${conversationId}/message`,
       {
@@ -61,7 +64,7 @@ export const api = {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify(body),
       }
     );
     if (!response.ok) {
@@ -73,7 +76,11 @@ export const api = {
   /**
    * Send a message and receive streaming updates.
    */
-  async sendMessageStream(conversationId, content, onEvent) {
+  async sendMessageStream(conversationId, content, onEvent, attachments = null, allowWrites = false) {
+    const body = { content };
+    if (attachments && attachments.length > 0) body.attachments = attachments;
+    if (allowWrites) body.allow_writes = true;
+
     const response = await fetch(
       `${API_BASE}/api/conversations/${conversationId}/message/stream`,
       {
@@ -81,7 +88,7 @@ export const api = {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify(body),
       }
     );
 
@@ -275,5 +282,96 @@ export const api = {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  },
+
+  // --- Filesystem API ---
+
+  /**
+   * Mount a folder path on the host filesystem.
+   */
+  async mountFolder(path) {
+    const response = await fetch(`${API_BASE}/api/fs/mount`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    });
+    if (!response.ok) throw new Error('Failed to mount folder');
+    return response.json();
+  },
+
+  /**
+   * Unmount a folder.
+   */
+  async unmountFolder(mountId) {
+    const response = await fetch(`${API_BASE}/api/fs/mount/${mountId}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) throw new Error('Failed to unmount folder');
+    return response.json();
+  },
+
+  /**
+   * List current mounts.
+   */
+  async listMounts() {
+    const response = await fetch(`${API_BASE}/api/fs/mounts`);
+    if (!response.ok) throw new Error('Failed to list mounts');
+    return response.json();
+  },
+
+  /**
+   * Browse a directory within a mounted folder.
+   */
+  async browseDirectory(path) {
+    const response = await fetch(`${API_BASE}/api/fs/browse?path=${encodeURIComponent(path)}`);
+    if (!response.ok) throw new Error('Failed to browse directory');
+    return response.json();
+  },
+
+  /**
+   * Read a file from a mounted folder.
+   */
+  async readFile(path) {
+    const response = await fetch(`${API_BASE}/api/fs/read?path=${encodeURIComponent(path)}`);
+    if (!response.ok) throw new Error('Failed to read file');
+    return response.json();
+  },
+
+  /**
+   * Search files within mounted folders.
+   */
+  async searchFiles(path, pattern) {
+    const response = await fetch(`${API_BASE}/api/fs/search?path=${encodeURIComponent(path)}&pattern=${encodeURIComponent(pattern)}`);
+    if (!response.ok) throw new Error('Failed to search files');
+    return response.json();
+  },
+
+  /**
+   * Write a file to disk (chairman only, requires approval).
+   */
+  async writeFile(path, content) {
+    const response = await fetch(`${API_BASE}/api/fs/write`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, content }),
+    });
+    if (!response.ok) throw new Error('Failed to write file');
+    return response.json();
+  },
+
+  /**
+   * Update mounted paths for a conversation.
+   */
+  async updateConversationMounts(conversationId, mountedPaths) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/mounts`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mounted_paths: mountedPaths }),
+      }
+    );
+    if (!response.ok) throw new Error('Failed to update conversation mounts');
+    return response.json();
   },
 };

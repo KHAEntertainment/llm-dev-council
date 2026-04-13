@@ -23,6 +23,12 @@ function App() {
   // Archive view state
   const [showArchived, setShowArchived] = useState(false);
 
+  // Mounted folder paths for current conversation
+  const [mountedPaths, setMountedPaths] = useState([]);
+
+  // Pending write proposals from chairman
+  const [pendingWrites, setPendingWrites] = useState(null);
+
   // Dark mode state
   const [darkMode, setDarkMode] = useState(() => {
     const saved = localStorage.getItem('llm-council-dark-mode');
@@ -107,6 +113,8 @@ function App() {
       const chairman = conv.chairman_model || defaultConfig?.chairman_model || '';
       setCouncilModels(models);
       setChairmanModel(chairman);
+      // Load mounted paths
+      setMountedPaths(conv.mounted_paths || []);
     } catch (error) {
       console.error('Failed to load conversation:', error);
     }
@@ -146,13 +154,39 @@ function App() {
     }
   };
 
-  const handleSendMessage = async (content) => {
+  const handleMountsChange = async (newMounts) => {
+    setMountedPaths(newMounts);
+    if (currentConversationId) {
+      try {
+        await api.updateConversationMounts(currentConversationId, newMounts);
+      } catch (error) {
+        console.error('Failed to update conversation mounts:', error);
+      }
+    }
+  };
+
+  const handleApproveWrites = async (approvedWrites) => {
+    for (const write of approvedWrites) {
+      try {
+        await api.writeFile(write.path, write.content);
+      } catch (error) {
+        console.error('Failed to write file:', error);
+      }
+    }
+    setPendingWrites(null);
+  };
+
+  const handleRejectWrites = () => {
+    setPendingWrites(null);
+  };
+
+  const handleSendMessage = async (content, attachments = null, allowWrites = false) => {
     if (!currentConversationId) return;
 
     setIsLoading(true);
     try {
       // Optimistically add user message to UI
-      const userMessage = { role: 'user', content };
+      const userMessage = { role: 'user', content, attachments: attachments || undefined };
       setCurrentConversation((prev) => ({
         ...prev,
         messages: [...prev.messages, userMessage],
@@ -237,6 +271,10 @@ function App() {
               lastMsg.loading.stage3 = false;
               return { ...prev, messages };
             });
+            // Check for proposed writes from chairman
+            if (event.data?.proposed_writes?.length > 0) {
+              setPendingWrites(event.data.proposed_writes);
+            }
             break;
 
           case 'title_complete':
@@ -258,7 +296,7 @@ function App() {
           default:
             console.log('Unknown event type:', eventType);
         }
-      });
+      }, attachments, allowWrites);
     } catch (error) {
       console.error('Failed to send message:', error);
       // Remove optimistic messages on error
@@ -291,6 +329,11 @@ function App() {
         chairmanModel={chairmanModel}
         onModelsChange={handleModelsChange}
         modelPricing={modelPricing}
+        mountedPaths={mountedPaths}
+        onMountsChange={handleMountsChange}
+        pendingWrites={pendingWrites}
+        onApproveWrites={handleApproveWrites}
+        onRejectWrites={handleRejectWrites}
       />
     </div>
   );
