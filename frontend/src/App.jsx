@@ -29,6 +29,25 @@ function App() {
   // Pending write proposals from chairman
   const [pendingWrites, setPendingWrites] = useState(null);
 
+  // Current tool-call status for the loading indicator
+  const [toolStatus, setToolStatus] = useState(null);
+
+  // Dark mode state
+  const [darkMode, setDarkMode] = useState(() => {
+    const saved = localStorage.getItem('llm-council-dark-mode');
+    return saved === 'true';
+  });
+
+  // Apply dark mode class to root element
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', darkMode);
+    localStorage.setItem('llm-council-dark-mode', String(darkMode));
+  }, [darkMode]);
+
+  const handleToggleDarkMode = () => {
+    setDarkMode((prev) => !prev);
+  };
+
   const handleToggleArchived = () => {
     setShowArchived((prev) => !prev);
   };
@@ -130,9 +149,9 @@ function App() {
       const models = councilModels.length > 0 ? councilModels : (defaultConfig?.council_models || null);
       const chairman = chairmanModel || (defaultConfig?.chairman_model || null);
       const newConv = await api.createConversation(models, chairman);
-      setConversations([
+      setConversations((prev) => [
         { id: newConv.id, created_at: newConv.created_at, message_count: 0, title: 'New Conversation' },
-        ...conversations,
+        ...prev,
       ]);
       setCurrentConversationId(newConv.id);
     } catch (error) {
@@ -185,10 +204,11 @@ function App() {
     setPendingWrites(null);
   };
 
-  const handleSendMessage = async (content, attachments = null, allowWrites = false) => {
+  const handleSendMessage = async (content, attachments = null, allowWrites = false, enableMcpTools = false) => {
     if (!currentConversationId) return;
 
     setIsLoading(true);
+    setToolStatus(null);
     try {
       // Optimistically add user message to UI
       const userMessage = { role: 'user', content, attachments: attachments || undefined };
@@ -274,6 +294,15 @@ function App() {
             });
             break;
 
+          case 'tool_call_start':
+            setToolStatus({ tool: event.tool, model: event.model, stage: event.stage });
+            break;
+
+          case 'tool_call_complete':
+            // Keep the last started tool visible briefly, or clear if no more activity
+            // For now, leave it — next tool_call_start will overwrite
+            break;
+
           case 'stage3_complete':
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
@@ -297,17 +326,19 @@ function App() {
             // Stream complete, reload conversations list
             loadConversations();
             setIsLoading(false);
+            setToolStatus(null);
             break;
 
           case 'error':
             console.error('Stream error:', event.message);
             setIsLoading(false);
+            setToolStatus(null);
             break;
 
           default:
             console.log('Unknown event type:', eventType);
         }
-      }, attachments, allowWrites);
+      }, attachments, allowWrites, enableMcpTools);
     } catch (error) {
       console.error('Failed to send message:', error);
       // Remove optimistic messages on error
@@ -326,6 +357,8 @@ function App() {
         currentConversationId={currentConversationId}
         onSelectConversation={handleSelectConversation}
         onNewConversation={handleNewConversation}
+        darkMode={darkMode}
+        onToggleDarkMode={handleToggleDarkMode}
         showArchived={showArchived}
         onToggleArchived={handleToggleArchived}
         onConversationsChanged={loadConversations}
@@ -334,6 +367,7 @@ function App() {
         conversation={currentConversation}
         onSendMessage={handleSendMessage}
         isLoading={isLoading}
+        toolStatus={toolStatus}
         councilModels={councilModels}
         chairmanModel={chairmanModel}
         onModelsChange={handleModelsChange}

@@ -43,28 +43,10 @@ export default function FolderManager({ onMountsChange }) {
   };
 
   const handlePickFolder = async () => {
-    if (typeof window.showDirectoryPicker === 'function') {
-      try {
-        const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
-        // Browser can't reveal absolute path; prompt user to type it
-        const name = handle.name;
-        const confirmed = prompt(
-          `Selected folder: "${name}"\n\nThe browser cannot reveal the full path. Please paste the absolute path to this folder:`,
-          ''
-        );
-        if (confirmed && confirmed.trim()) {
-          setPathInput(confirmed.trim());
-        }
-        return true;
-      } catch (err) {
-        if (err.name !== 'AbortError') {
-          console.error('Directory picker error:', err);
-        }
-        return false;
-      }
-    } else {
-      return false;
-    }
+    // Browser File System Access API intentionally hides absolute paths.
+    // Direct text input is the only reliable way to get an absolute path.
+    setShowInput(true);
+    return true;
   };
 
   const handleUnmount = async (mountId) => {
@@ -137,17 +119,7 @@ export default function FolderManager({ onMountsChange }) {
         <span className="folder-manager-title">Mounted Folders</span>
         <button
           className="folder-mount-btn"
-          onClick={async () => {
-            if (typeof window.showDirectoryPicker === 'function') {
-              const picked = await handlePickFolder();
-              // Only show manual input if picker was cancelled/unavailable
-              if (!picked) {
-                setShowInput(true);
-              }
-            } else {
-              setShowInput(true);
-            }
-          }}
+          onClick={handlePickFolder}
           title="Mount a folder"
         >
           + Mount

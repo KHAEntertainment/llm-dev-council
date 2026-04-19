@@ -13,6 +13,8 @@ import httpx
 from . import storage
 from . import presets
 from . import filesystem
+from . import mcp_servers_storage
+from . import mcp_connectors
 from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings
 from .config import load_config, save_config, get_council_models, get_chairman_model, OPENROUTER_API_KEY
 
@@ -39,6 +41,7 @@ class SendMessageRequest(BaseModel):
     content: str
     attachments: Optional[List[Dict[str, Any]]] = None
     allow_writes: bool = False
+    enable_mcp_tools: bool = False
 
 
 class UpdateConfigRequest(BaseModel):
@@ -79,6 +82,20 @@ class WriteFileRequest(BaseModel):
 class UpdateMountsRequest(BaseModel):
     """Request to update conversation mounts."""
     mounted_paths: List[str]
+
+
+class MCPServerConfigRequest(BaseModel):
+    """Request to create or update an MCP server config."""
+    name: str
+    transport: str
+    enabled: bool = True
+    scope: str = "council"
+    command: Optional[str] = None
+    args: Optional[List[str]] = None
+    env: Optional[Dict[str, Any]] = None
+    url: Optional[str] = None
+    headers: Optional[Dict[str, Any]] = None
+    auth_token: Optional[str] = None
 
 
 class ConversationMetadata(BaseModel):
@@ -166,7 +183,8 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
         chairman_model=chairman_model,
         attachments=request.attachments,
         mounted_paths=mounted_paths if mounted_paths else None,
-        allow_writes=request.allow_writes
+        allow_writes=request.allow_writes,
+        enable_mcp_tools=request.enable_mcp_tools
     )
 
     # Add assistant message with all stages
@@ -201,6 +219,8 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
     is_first_message = len(conversation["messages"]) == 0
 
     async def event_generator():
+        council_exit_stack = None
+        chairman_exit_stack = None
         try:
             # Add user message
             storage.add_user_message(conversation_id, request.content, attachments=request.attachments)
@@ -216,9 +236,47 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             chairman_model = conv.get("chairman_model")
             mounted_paths = conv.get("mounted_paths", [])
 
+            # --- MCP Tool Setup ---
+            council_tools = None
+            council_tool_sessions = {}
+            chairman_tools = None
+            chairman_tool_sessions = {}
+
+            if request.enable_mcp_tools:
+                try:
+                    council_tools, council_tool_sessions, council_exit_stack = await mcp_connectors.get_tools_for_scope("council")
+                except Exception as e:
+                    print(f"Failed to load council MCP tools: {e}")
+                try:
+                    chairman_tools, chairman_tool_sessions, chairman_exit_stack = await mcp_connectors.get_tools_for_scope("chairman")
+                except Exception as e:
+                    print(f"Failed to load chairman MCP tools: {e}")
+
+            # Event queue for tool-call status updates during stages
+            event_queue = asyncio.Queue()
+            def on_event(event):
+                event_queue.put_nowait(event)
+
             # Stage 1: Collect responses
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
-            stage1_results = await stage1_collect_responses(request.content, models=council_models, attachments=request.attachments, mounted_paths=mounted_paths if mounted_paths else None)
+            stage1_task = asyncio.create_task(stage1_collect_responses(
+                request.content,
+                models=council_models,
+                attachments=request.attachments,
+                mounted_paths=mounted_paths if mounted_paths else None,
+                tools=council_tools,
+                tool_to_session=council_tool_sessions,
+                on_event=on_event,
+            ))
+            while not stage1_task.done():
+                try:
+                    event = await asyncio.wait_for(event_queue.get(), timeout=0.2)
+                    yield f"data: {json.dumps(event)}\n\n"
+                except asyncio.TimeoutError:
+                    pass
+            stage1_results = await stage1_task
+            while not event_queue.empty():
+                yield f"data: {json.dumps(event_queue.get_nowait())}\n\n"
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 
             # Stage 2: Collect rankings
@@ -229,7 +287,27 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
 
             # Stage 3: Synthesize final answer
             yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
-            stage3_result = await stage3_synthesize_final(request.content, stage1_results, stage2_results, chairman_model=chairman_model, attachments=request.attachments, mounted_paths=mounted_paths if mounted_paths else None, allow_writes=request.allow_writes)
+            stage3_task = asyncio.create_task(stage3_synthesize_final(
+                request.content,
+                stage1_results,
+                stage2_results,
+                chairman_model=chairman_model,
+                attachments=request.attachments,
+                mounted_paths=mounted_paths if mounted_paths else None,
+                allow_writes=request.allow_writes,
+                tools=chairman_tools,
+                tool_to_session=chairman_tool_sessions,
+                on_event=on_event,
+            ))
+            while not stage3_task.done():
+                try:
+                    event = await asyncio.wait_for(event_queue.get(), timeout=0.2)
+                    yield f"data: {json.dumps(event)}\n\n"
+                except asyncio.TimeoutError:
+                    pass
+            stage3_result = await stage3_task
+            while not event_queue.empty():
+                yield f"data: {json.dumps(event_queue.get_nowait())}\n\n"
             yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
 
             # Wait for title generation if it was started
@@ -252,6 +330,18 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
         except Exception as e:
             # Send error event
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        finally:
+            # Clean up MCP connections
+            if council_exit_stack:
+                try:
+                    await council_exit_stack.aclose()
+                except Exception as e:
+                    print(f"Error closing council MCP connections: {e}")
+            if chairman_exit_stack:
+                try:
+                    await chairman_exit_stack.aclose()
+                except Exception as e:
+                    print(f"Error closing chairman MCP connections: {e}")
 
     return StreamingResponse(
         event_generator(),
@@ -611,6 +701,62 @@ async def delete_preset(preset_id: str):
     if not deleted:
         raise HTTPException(status_code=404, detail="Preset not found")
     return {"deleted": True}
+
+
+# --- MCP Server endpoints ---
+
+@app.get("/api/mcp/servers")
+async def list_mcp_servers():
+    """List all configured MCP servers."""
+    return mcp_servers_storage.list_servers()
+
+
+@app.post("/api/mcp/servers")
+async def create_mcp_server(request: MCPServerConfigRequest):
+    """Add a new MCP server configuration."""
+    server = mcp_servers_storage.add_server(request.dict())
+    return server
+
+
+@app.put("/api/mcp/servers/{server_id}")
+async def update_mcp_server(server_id: str, request: MCPServerConfigRequest):
+    """Update an existing MCP server configuration."""
+    updated = mcp_servers_storage.update_server(server_id, request.dict())
+    if not updated:
+        raise HTTPException(status_code=404, detail="MCP server not found")
+    return updated
+
+
+@app.delete("/api/mcp/servers/{server_id}")
+async def delete_mcp_server(server_id: str):
+    """Delete an MCP server configuration."""
+    deleted = mcp_servers_storage.delete_server(server_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="MCP server not found")
+    return {"deleted": True}
+
+
+@app.post("/api/mcp/servers/{server_id}/test")
+async def test_mcp_server(server_id: str):
+    """Test connection to an MCP server and return status."""
+    config = mcp_servers_storage.get_server(server_id)
+    if not config:
+        raise HTTPException(status_code=404, detail="MCP server not found")
+    result = await mcp_connectors.test_connection(config)
+    return result
+
+
+@app.get("/api/mcp/servers/{server_id}/tools")
+async def list_mcp_server_tools(server_id: str):
+    """List tools available from a connected MCP server."""
+    config = mcp_servers_storage.get_server(server_id)
+    if not config:
+        raise HTTPException(status_code=404, detail="MCP server not found")
+    try:
+        tools = await mcp_connectors.get_server_tools(config)
+        return {"tools": tools}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 if __name__ == "__main__":

@@ -8,10 +8,48 @@ import FolderManager from './FolderManager';
 import WriteApprovalDialog from './WriteApprovalDialog';
 import './ChatInterface.css';
 
+// Human-readable labels for tool-call status updates
+const TOOL_STATUS_LABELS = {
+  // Filesystem tools
+  read_file: 'Reading from codebase...',
+  search_files: 'Searching files...',
+  browse_directory: 'Exploring directory...',
+  write_file: 'Chairman is proposing file changes...',
+  // MCP tools
+  read_wiki_structure: 'Consulting DeepWiki...',
+  read_wiki_contents: 'Reading DeepWiki documentation...',
+  ask_question: 'Querying DeepWiki...',
+  generate_wiki: 'Generating wiki...',
+  // Devin tools
+  devin_knowledge_manage: 'Managing Devin knowledge...',
+  devin_playbook_manage: 'Managing Devin playbooks...',
+  devin_schedule_manage: 'Managing Devin schedules...',
+  devin_session_create: 'Creating Devin session...',
+  devin_session_interact: 'Interacting with Devin session...',
+  devin_session_events: 'Inspecting Devin session events...',
+  devin_session_search: 'Searching Devin sessions...',
+  list_integrations: 'Listing integrations...',
+  list_available_repos: 'Listing available repositories...',
+};
+
+function formatToolStatus({ tool, stage }) {
+  if (stage === 'stage3' && tool === 'write_file') {
+    return 'Chairman is proposing file changes...';
+  }
+  return TOOL_STATUS_LABELS[tool] || `Running ${tool.replace(/_/g, ' ')}...`;
+}
+
+function formatLoadingStatus(isLoading, toolStatus) {
+  if (!isLoading) return null;
+  if (toolStatus) return formatToolStatus(toolStatus);
+  return 'Consulting the council...';
+}
+
 export default function ChatInterface({
   conversation,
   onSendMessage,
   isLoading,
+  toolStatus,
   councilModels,
   chairmanModel,
   onModelsChange,
@@ -25,6 +63,7 @@ export default function ChatInterface({
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState([]);
   const [allowWrites, setAllowWrites] = useState(false);
+  const [enableMcpTools, setEnableMcpTools] = useState(false);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
 
@@ -67,7 +106,7 @@ export default function ChatInterface({
     e.preventDefault();
     if ((input.trim() || attachments.length > 0) && !isLoading) {
       const atts = attachments.length > 0 ? attachments.map(({ filename, mimeType, data, type }) => ({ filename, mimeType, data, type })) : null;
-      onSendMessage(input, atts, allowWrites);
+      onSendMessage(input, atts, allowWrites, enableMcpTools);
       setInput('');
       setAttachments([]);
     }
@@ -202,7 +241,7 @@ export default function ChatInterface({
         {isLoading && (
           <div className="loading-indicator">
             <div className="spinner"></div>
-            <span>Consulting the council...</span>
+            <span>{formatLoadingStatus(isLoading, toolStatus)}</span>
           </div>
         )}
 
@@ -261,6 +300,14 @@ export default function ChatInterface({
                 Allow chairman to write files
               </label>
             )}
+            <button
+              type="button"
+              className={`mcp-toggle-btn ${enableMcpTools ? 'active' : ''}`}
+              onClick={() => setEnableMcpTools((prev) => !prev)}
+              title={enableMcpTools ? 'MCP tools enabled' : 'MCP tools disabled'}
+            >
+              {enableMcpTools ? '🔌 MCP On' : '🔌 MCP Off'}
+            </button>
           </div>
         </form>
       ) : (
@@ -325,6 +372,14 @@ export default function ChatInterface({
                 Allow chairman to write files
               </label>
             )}
+            <button
+              type="button"
+              className={`mcp-toggle-btn ${enableMcpTools ? 'active' : ''}`}
+              onClick={() => setEnableMcpTools((prev) => !prev)}
+              title={enableMcpTools ? 'MCP tools enabled' : 'MCP tools disabled'}
+            >
+              {enableMcpTools ? '🔌 MCP On' : '🔌 MCP Off'}
+            </button>
           </form>
         </div>
       )}

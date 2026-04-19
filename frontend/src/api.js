@@ -76,10 +76,11 @@ export const api = {
   /**
    * Send a message and receive streaming updates.
    */
-  async sendMessageStream(conversationId, content, onEvent, attachments = null, allowWrites = false) {
+  async sendMessageStream(conversationId, content, onEvent, attachments = null, allowWrites = false, enableMcpTools = false) {
     const body = { content };
     if (attachments && attachments.length > 0) body.attachments = attachments;
     if (allowWrites) body.allow_writes = true;
+    if (enableMcpTools) body.enable_mcp_tools = true;
 
     const response = await fetch(
       `${API_BASE}/api/conversations/${conversationId}/message/stream`,
@@ -309,7 +310,10 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path }),
     });
-    if (!response.ok) throw new Error('Failed to mount folder');
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || 'Failed to mount folder');
+    }
     return response.json();
   },
 
@@ -320,7 +324,10 @@ export const api = {
     const response = await fetch(`${API_BASE}/api/fs/mount/${mountId}`, {
       method: 'DELETE',
     });
-    if (!response.ok) throw new Error('Failed to unmount folder');
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || 'Failed to unmount folder');
+    }
     return response.json();
   },
 
@@ -338,7 +345,10 @@ export const api = {
    */
   async browseDirectory(path) {
     const response = await fetch(`${API_BASE}/api/fs/browse?path=${encodeURIComponent(path)}`);
-    if (!response.ok) throw new Error('Failed to browse directory');
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || 'Failed to browse directory');
+    }
     return response.json();
   },
 
@@ -347,7 +357,10 @@ export const api = {
    */
   async readFile(path) {
     const response = await fetch(`${API_BASE}/api/fs/read?path=${encodeURIComponent(path)}`);
-    if (!response.ok) throw new Error('Failed to read file');
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || 'Failed to read file');
+    }
     return response.json();
   },
 
@@ -356,7 +369,10 @@ export const api = {
    */
   async searchFiles(path, pattern) {
     const response = await fetch(`${API_BASE}/api/fs/search?path=${encodeURIComponent(path)}&pattern=${encodeURIComponent(pattern)}`);
-    if (!response.ok) throw new Error('Failed to search files');
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || 'Failed to search files');
+    }
     return response.json();
   },
 
@@ -369,7 +385,10 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path, content }),
     });
-    if (!response.ok) throw new Error('Failed to write file');
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || 'Failed to write file');
+    }
     return response.json();
   },
 
@@ -386,6 +405,43 @@ export const api = {
       }
     );
     if (!response.ok) throw new Error('Failed to update conversation mounts');
+    return response.json();
+  },
+
+  // --- MCP Server API ---
+
+  async listMCPServers() {
+    const response = await fetch(`${API_BASE}/api/mcp/servers`);
+    if (!response.ok) throw new Error('Failed to list MCP servers');
+    return response.json();
+  },
+
+  async createMCPServer(payload) {
+    const response = await fetch(`${API_BASE}/api/mcp/servers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || 'Failed to add MCP server');
+    }
+    return response.json();
+  },
+
+  async deleteMCPServer(serverId) {
+    const response = await fetch(`${API_BASE}/api/mcp/servers/${serverId}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) throw new Error('Failed to delete MCP server');
+    return response.json();
+  },
+
+  async testMCPServer(serverId) {
+    const response = await fetch(`${API_BASE}/api/mcp/servers/${serverId}/test`, {
+      method: 'POST',
+    });
+    if (!response.ok) throw new Error('Failed to test MCP server');
     return response.json();
   },
 };

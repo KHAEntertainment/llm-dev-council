@@ -1,9 +1,12 @@
 """3-stage LLM Council orchestration."""
 
-from typing import List, Dict, Any, Tuple, Optional
+import asyncio
+import json
+from typing import List, Dict, Any, Tuple, Optional, Callable
 from .openrouter import query_models_parallel, query_model
 from .config import get_council_models, get_chairman_model
 from . import filesystem
+from . import mcp_connectors
 
 # Maximum size for inline text/json attachments (100KB)
 MAX_INLINE_ATTACHMENT_CHARS = 100_000
@@ -86,7 +89,81 @@ def format_user_message(content: str, attachments: Optional[List[Dict[str, Any]]
     return {"role": "user", "content": message_content}
 
 
-async def stage1_collect_responses(user_query: str, models: Optional[List[str]] = None, attachments: Optional[List[Dict[str, Any]]] = None, mounted_paths: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+async def _query_model_with_tools(
+    model: str,
+    messages: List[Dict[str, Any]],
+    tools: List[Dict[str, Any]],
+    tool_to_session: Dict[str, Any],
+    max_rounds: int = 5,
+    stage: str = "stage1",
+    on_event: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Query a single model with tools, handling the bounded tool-use loop.
+    """
+    current_messages = list(messages)
+
+    for _ in range(max_rounds):
+        response = await query_model(model, current_messages, tools=tools)
+        if response is None:
+            return None
+
+        content = response.get('content')
+        tool_calls = response.get('tool_calls')
+
+        if not tool_calls:
+            return response
+
+        # Add assistant message with tool_calls
+        assistant_msg = {
+            "role": "assistant",
+            "content": content or "",
+            "tool_calls": tool_calls,
+        }
+        current_messages.append(assistant_msg)
+
+        # Execute each tool call
+        for tc in tool_calls:
+            tool_name = tc['function']['name']
+            if on_event:
+                on_event({
+                    "type": "tool_call_start",
+                    "tool": tool_name,
+                    "model": model,
+                    "stage": stage,
+                })
+            try:
+                arguments = json.loads(tc['function']['arguments'])
+            except json.JSONDecodeError:
+                arguments = {}
+            result = await mcp_connectors.execute_tool_call(tool_name, arguments, tool_to_session)
+            if on_event:
+                on_event({
+                    "type": "tool_call_complete",
+                    "tool": tool_name,
+                    "model": model,
+                    "stage": stage,
+                })
+
+            current_messages.append({
+                "role": "tool",
+                "tool_call_id": tc['id'],
+                "content": str(result),
+            })
+
+    # Max rounds exceeded — return last response
+    return response
+
+
+async def stage1_collect_responses(
+    user_query: str,
+    models: Optional[List[str]] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
+    mounted_paths: Optional[List[str]] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_to_session: Optional[Dict[str, Any]] = None,
+    on_event: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> List[Dict[str, Any]]:
     """
     Stage 1: Collect individual responses from all council models.
 
@@ -95,6 +172,8 @@ async def stage1_collect_responses(user_query: str, models: Optional[List[str]] 
         models: Optional list of model IDs to use (defaults to config)
         attachments: Optional file/image attachments
         mounted_paths: Optional list of mounted folder paths for context
+        tools: Optional OpenAI-format tool schemas for function calling
+        tool_to_session: Optional map of tool_name -> ClientSession for execution
 
     Returns:
         List of dicts with 'model' and 'response' keys
@@ -104,12 +183,21 @@ async def stage1_collect_responses(user_query: str, models: Optional[List[str]] 
     query_with_context = user_query + fs_context if fs_context else user_query
     messages = [format_user_message(query_with_context, attachments)]
 
-    # Query all models in parallel
-    responses = await query_models_parallel(council_models, messages)
+    if tools and tool_to_session:
+        # Each model runs its own isolated tool-use loop in parallel
+        tasks = [
+            _query_model_with_tools(model, messages, tools, tool_to_session, stage="stage1", on_event=on_event)
+            for model in council_models
+        ]
+        responses = await asyncio.gather(*tasks)
+        response_map = {model: resp for model, resp in zip(council_models, responses)}
+    else:
+        # Query all models in parallel without tools
+        response_map = await query_models_parallel(council_models, messages)
 
     # Format results
     stage1_results = []
-    for model, response in responses.items():
+    for model, response in response_map.items():
         if response is not None:  # Only include successful responses
             stage1_results.append({
                 "model": model,
@@ -210,7 +298,10 @@ async def stage3_synthesize_final(
     chairman_model: Optional[str] = None,
     attachments: Optional[List[Dict[str, Any]]] = None,
     mounted_paths: Optional[List[str]] = None,
-    allow_writes: bool = False
+    allow_writes: bool = False,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_to_session: Optional[Dict[str, Any]] = None,
+    on_event: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
     """
     Stage 3: Chairman synthesizes final response.
@@ -272,8 +363,11 @@ Provide a clear, well-reasoned final answer that represents the council's collec
 
     messages = [format_user_message(chairman_prompt, attachments)]
 
-    # Query the chairman model
-    response = await query_model(chairman, messages)
+    # Query the chairman model (with tools if provided)
+    if tools and tool_to_session:
+        response = await _query_model_with_tools(chairman, messages, tools, tool_to_session, stage="stage3", on_event=on_event)
+    else:
+        response = await query_model(chairman, messages)
 
     if response is None:
         # Fallback: use top-ranked Stage 1 answer if chairman fails
@@ -447,7 +541,9 @@ async def run_full_council(
     chairman_model: Optional[str] = None,
     attachments: Optional[List[Dict[str, Any]]] = None,
     mounted_paths: Optional[List[str]] = None,
-    allow_writes: bool = False
+    allow_writes: bool = False,
+    enable_mcp_tools: bool = False,
+    on_event: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Tuple[List, List, Dict, Dict]:
     """
     Run the complete 3-stage council process.
@@ -457,43 +553,89 @@ async def run_full_council(
         council_models: Optional list of council model IDs
         chairman_model: Optional chairman model ID
         attachments: Optional list of file/image attachments for multimodal queries
+        enable_mcp_tools: Whether to inject MCP tools into Stage 1 and Stage 3
 
     Returns:
         Tuple of (stage1_results, stage2_results, stage3_result, metadata)
     """
-    # Stage 1: Collect individual responses
-    stage1_results = await stage1_collect_responses(user_query, models=council_models, attachments=attachments, mounted_paths=mounted_paths)
+    # --- MCP Tool Setup ---
+    council_tools = None
+    council_tool_sessions = {}
+    council_exit_stack = None
 
-    # If no models responded successfully, return error
-    if not stage1_results:
-        return [], [], {
-            "model": "error",
-            "response": "All models failed to respond. Please try again."
-        }, {}
+    chairman_tools = None
+    chairman_tool_sessions = {}
+    chairman_exit_stack = None
 
-    # Stage 2: Collect rankings
-    stage2_results, label_to_model = await stage2_collect_rankings(
-        user_query, stage1_results, models=council_models, attachments=attachments, mounted_paths=mounted_paths
-    )
+    if enable_mcp_tools:
+        try:
+            council_tools, council_tool_sessions, council_exit_stack = await mcp_connectors.get_tools_for_scope("council")
+        except Exception as e:
+            print(f"Failed to load council MCP tools: {e}")
 
-    # Calculate aggregate rankings
-    aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
+        try:
+            chairman_tools, chairman_tool_sessions, chairman_exit_stack = await mcp_connectors.get_tools_for_scope("chairman")
+        except Exception as e:
+            print(f"Failed to load chairman MCP tools: {e}")
 
-    # Stage 3: Synthesize final answer
-    stage3_result = await stage3_synthesize_final(
-        user_query,
-        stage1_results,
-        stage2_results,
-        chairman_model=chairman_model,
-        attachments=attachments,
-        mounted_paths=mounted_paths,
-        allow_writes=allow_writes
-    )
+    try:
+        # Stage 1: Collect individual responses
+        stage1_results = await stage1_collect_responses(
+            user_query,
+            models=council_models,
+            attachments=attachments,
+            mounted_paths=mounted_paths,
+            tools=council_tools,
+            tool_to_session=council_tool_sessions,
+            on_event=on_event,
+        )
 
-    # Prepare metadata
-    metadata = {
-        "label_to_model": label_to_model,
-        "aggregate_rankings": aggregate_rankings
-    }
+        # If no models responded successfully, return error
+        if not stage1_results:
+            return [], [], {
+                "model": "error",
+                "response": "All models failed to respond. Please try again."
+            }, {}
 
-    return stage1_results, stage2_results, stage3_result, metadata
+        # Stage 2: Collect rankings
+        stage2_results, label_to_model = await stage2_collect_rankings(
+            user_query, stage1_results, models=council_models, attachments=attachments, mounted_paths=mounted_paths
+        )
+
+        # Calculate aggregate rankings
+        aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
+
+        # Stage 3: Synthesize final answer
+        stage3_result = await stage3_synthesize_final(
+            user_query,
+            stage1_results,
+            stage2_results,
+            chairman_model=chairman_model,
+            attachments=attachments,
+            mounted_paths=mounted_paths,
+            allow_writes=allow_writes,
+            tools=chairman_tools,
+            tool_to_session=chairman_tool_sessions,
+            on_event=on_event,
+        )
+
+        # Prepare metadata
+        metadata = {
+            "label_to_model": label_to_model,
+            "aggregate_rankings": aggregate_rankings
+        }
+
+        return stage1_results, stage2_results, stage3_result, metadata
+
+    finally:
+        # Clean up MCP connections
+        if council_exit_stack:
+            try:
+                await council_exit_stack.aclose()
+            except Exception as e:
+                print(f"Error closing council MCP connections: {e}")
+        if chairman_exit_stack:
+            try:
+                await chairman_exit_stack.aclose()
+            except Exception as e:
+                print(f"Error closing chairman MCP connections: {e}")
