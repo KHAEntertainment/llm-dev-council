@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
 import './FolderManager.css';
 
-export default function FolderManager({ onMountsChange }) {
+export default function FolderManager({ mountedPaths = [], onMountsChange }) {
   const [mounts, setMounts] = useState([]);
   const [showInput, setShowInput] = useState(false);
   const [pathInput, setPathInput] = useState('');
@@ -11,18 +11,19 @@ export default function FolderManager({ onMountsChange }) {
   const [browseEntries, setBrowseEntries] = useState([]);
   const [browseStack, setBrowseStack] = useState([]);
 
-  const loadMounts = async () => {
+  const loadMounts = useCallback(async () => {
     try {
       const data = await api.listMounts();
       setMounts(data);
     } catch (err) {
       console.error('Failed to load mounts:', err);
     }
-  };
+  }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadMounts();
-  }, []);
+  }, [loadMounts, mountedPaths]);
 
   const handleMount = async () => {
     if (!pathInput.trim()) return;
@@ -45,8 +46,8 @@ export default function FolderManager({ onMountsChange }) {
   const handlePickFolder = async () => {
     // Browser File System Access API intentionally hides absolute paths.
     // Direct text input is the only reliable way to get an absolute path.
+    setError('');
     setShowInput(true);
-    return true;
   };
 
   const handleUnmount = async (mountId) => {

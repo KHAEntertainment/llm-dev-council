@@ -2,12 +2,24 @@
 
 import json
 import os
-import tempfile
-import fcntl
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX fallback
+    fcntl = None
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 from .config import DATA_DIR
+
+
+def _lock_file(lock_file):
+    if fcntl is not None:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+
+
+def _unlock_file(lock_file):
+    if fcntl is not None:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def ensure_data_dir():
@@ -87,7 +99,7 @@ def save_conversation(conversation: Dict[str, Any]):
     lock_path = path + ".lock"
 
     with open(lock_path, 'w') as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        _lock_file(lock_file)
         try:
             tmp_path = path + ".tmp"
             with open(tmp_path, 'w') as f:
@@ -96,7 +108,11 @@ def save_conversation(conversation: Dict[str, Any]):
                 os.fsync(f.fileno())
             os.replace(tmp_path, path)
         finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            _unlock_file(lock_file)
+    try:
+        os.remove(lock_path)
+    except OSError:
+        pass
 
 
 def list_conversations(archived: bool = False) -> List[Dict[str, Any]]:

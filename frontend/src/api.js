@@ -129,7 +129,7 @@ export const api = {
       try {
         const event = JSON.parse(data);
         onEvent(event.type, event);
-      } catch (e) {
+      } catch {
         // Incomplete frame at stream end, ignore
       }
     }
@@ -379,11 +379,11 @@ export const api = {
   /**
    * Write a file to disk (chairman only, requires approval).
    */
-  async writeFile(path, content) {
+  async writeFile(path, content, proposalId) {
     const response = await fetch(`${API_BASE}/api/fs/write`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path, content }),
+      body: JSON.stringify({ path, content, proposal_id: proposalId }),
     });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));

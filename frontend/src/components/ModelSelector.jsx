@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import ModelBrowserModal from './ModelBrowserModal';
 import PresetManager from './PresetManager';
 import './ModelSelector.css';

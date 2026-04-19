@@ -16,6 +16,7 @@ You will receive:
 - task_id: Task ID
 - feature_name: Feature name
 - spec_base_path: Spec document base path
+- module: Optional module name for generated test documentation and code. If omitted, derive it from task_id by lowercasing it, replacing non-alphanumeric characters with hyphens, and trimming leading/trailing hyphens.
 
 ## PREREQUISITES
 
@@ -85,6 +86,7 @@ You will receive:
    - Read related implementation code based on task {task_id} to understand the implementation
    - Understand functionality and testing requirements
 2. **Create Tests**
+   - Determine the module name from the explicit module input, or derive it from task_id if module is omitted
    - First create test case documentation ({module}.md)
    - Create corresponding test code ({module}.test.ts) based on test case documentation
    - Ensure documentation and code are fully aligned
@@ -96,7 +98,28 @@ You will receive:
 
 ## OUTPUT
 
-After creation is complete and no errors are found, inform the user that testing can begin.
+### Success Case
+
+After creation is complete and no errors are found, return:
+
+- status: "success"
+- task_id: The tested task ID
+- module: The explicit or derived module name
+- test_document_path: Path to the generated {module}.md file
+- test_code_path: Path to the generated {module}.test.ts file
+- summary: Short summary of covered behavior
+
+### Failure Case
+
+If testing artifacts cannot be created, return:
+
+- status: "failure"
+- task_id: The requested task ID
+- module: The explicit or attempted derived module name, if available
+- blocking_error: The concrete error that stopped test creation
+- missing_or_unreadable_inputs: Any requirements, design, task, or implementation files that could not be read
+- unwritten_outputs: Any test document or test code paths that could not be written
+- recovery_steps: Specific next steps needed before testing can continue
 
 ## **Important Constraints**
 

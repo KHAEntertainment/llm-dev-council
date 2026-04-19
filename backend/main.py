@@ -3,12 +3,13 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
+from pydantic import BaseModel, Field, field_validator
+from typing import List, Dict, Any, Optional, Literal
 import uuid
 import json
 import asyncio
 import httpx
+from datetime import datetime
 
 from . import storage
 from . import presets
@@ -29,6 +30,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# File writes must originate from chairman proposals returned by this process.
+_write_proposals: Dict[str, Dict[str, Any]] = {}
+MAX_ATTACHMENTS = 5
+MAX_ATTACHMENT_DATA_CHARS = 14 * 1024 * 1024
+REDACTED_MCP_FIELDS = {"auth_token", "env", "headers"}
+
 
 class CreateConversationRequest(BaseModel):
     """Request to create a new conversation."""
@@ -36,12 +43,36 @@ class CreateConversationRequest(BaseModel):
     chairman_model: Optional[str] = None
 
 
+class Attachment(BaseModel):
+    """Validated user attachment payload."""
+    filename: str
+    mimeType: str
+    data: str
+    type: Literal["file", "image"]
+
+    @field_validator("data")
+    @classmethod
+    def validate_data_size(cls, data):
+        if len(data) > MAX_ATTACHMENT_DATA_CHARS:
+            raise ValueError("Attachment data is too large")
+        return data
+
+
 class SendMessageRequest(BaseModel):
     """Request to send a message in a conversation."""
     content: str
-    attachments: Optional[List[Dict[str, Any]]] = None
+    attachments: Optional[List[Attachment]] = None
     allow_writes: bool = False
     enable_mcp_tools: bool = False
+
+    @field_validator("attachments")
+    @classmethod
+    def validate_attachments(cls, attachments):
+        if attachments is None:
+            return attachments
+        if len(attachments) > MAX_ATTACHMENTS:
+            raise ValueError(f"At most {MAX_ATTACHMENTS} attachments are allowed")
+        return attachments
 
 
 class UpdateConfigRequest(BaseModel):
@@ -77,6 +108,7 @@ class WriteFileRequest(BaseModel):
     """Request to write a file (chairman only)."""
     path: str
     content: str
+    proposal_id: str
 
 
 class UpdateMountsRequest(BaseModel):
@@ -115,6 +147,49 @@ class Conversation(BaseModel):
     messages: List[Dict[str, Any]]
     council_models: Optional[List[str]] = None
     chairman_model: Optional[str] = None
+    mounted_paths: List[str] = Field(default_factory=list)
+
+
+def _register_write_proposals(stage3_result: Dict[str, Any], scope: str) -> None:
+    """Assign opaque IDs to chairman write proposals for later approval."""
+    proposals = stage3_result.get("proposed_writes") or []
+    for proposal in proposals:
+        proposal_id = proposal.get("id") or str(uuid.uuid4())
+        proposal["id"] = proposal_id
+        _write_proposals[proposal_id] = {
+            "path": proposal.get("path"),
+            "content": proposal.get("content", ""),
+            "scope": scope,
+            "created_at": datetime.utcnow().isoformat(),
+            "used": False,
+        }
+
+
+def _validate_write_proposal(proposal_id: str, path: str, content: str) -> Dict[str, Any]:
+    """Validate a registered chairman write proposal."""
+    proposal = _write_proposals.get(proposal_id)
+    if not proposal or proposal.get("used"):
+        raise HTTPException(status_code=403, detail="File write was not approved")
+    if proposal.get("path") != path or proposal.get("content") != content:
+        raise HTTPException(status_code=403, detail="File write does not match approved proposal")
+    return proposal
+
+
+def _redact_mcp_server(server: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a browser-safe MCP server config without secrets."""
+    return {key: value for key, value in server.items() if key not in REDACTED_MCP_FIELDS}
+
+
+def _redact_mcp_servers(servers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return browser-safe MCP server configs without secrets."""
+    return [_redact_mcp_server(server) for server in servers]
+
+
+def _attachment_dicts(attachments: Optional[List[Attachment]]) -> Optional[List[Dict[str, Any]]]:
+    """Convert validated attachment models to plain dictionaries."""
+    if attachments is None:
+        return None
+    return [attachment.model_dump() for attachment in attachments]
 
 
 @app.get("/")
@@ -136,7 +211,7 @@ async def create_conversation(request: CreateConversationRequest):
     # Use provided models or fall back to global config
     council_models = request.council_models or get_council_models()
     chairman_model = request.chairman_model or get_chairman_model()
-    conversation = storage.create_conversation(conversation_id, council_models, chairman_model)
+    conversation = await asyncio.to_thread(storage.create_conversation, conversation_id, council_models, chairman_model)
     return conversation
 
 
@@ -164,12 +239,13 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
     is_first_message = len(conversation["messages"]) == 0
 
     # Add user message
-    storage.add_user_message(conversation_id, request.content, attachments=request.attachments)
+    attachments = _attachment_dicts(request.attachments)
+    await asyncio.to_thread(storage.add_user_message, conversation_id, request.content, attachments=attachments)
 
     # If this is the first message, generate a title
     if is_first_message:
         title = await generate_conversation_title(request.content)
-        storage.update_conversation_title(conversation_id, title)
+        await asyncio.to_thread(storage.update_conversation_title, conversation_id, title)
 
     # Get per-conversation model config
     council_models = conversation.get("council_models")
@@ -181,18 +257,20 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
         request.content,
         council_models=council_models,
         chairman_model=chairman_model,
-        attachments=request.attachments,
+        attachments=attachments,
         mounted_paths=mounted_paths if mounted_paths else None,
         allow_writes=request.allow_writes,
         enable_mcp_tools=request.enable_mcp_tools
     )
 
     # Add assistant message with all stages
-    storage.add_assistant_message(
+    _register_write_proposals(stage3_result, conversation_id)
+    await asyncio.to_thread(
+        storage.add_assistant_message,
         conversation_id,
         stage1_results,
         stage2_results,
-        stage3_result
+        stage3_result,
     )
 
     # Return the complete response with metadata
@@ -223,7 +301,8 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
         chairman_exit_stack = None
         try:
             # Add user message
-            storage.add_user_message(conversation_id, request.content, attachments=request.attachments)
+            attachments = _attachment_dicts(request.attachments)
+            await asyncio.to_thread(storage.add_user_message, conversation_id, request.content, attachments=attachments)
 
             # Start title generation in parallel (don't await yet)
             title_task = None
@@ -262,7 +341,7 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             stage1_task = asyncio.create_task(stage1_collect_responses(
                 request.content,
                 models=council_models,
-                attachments=request.attachments,
+                attachments=attachments,
                 mounted_paths=mounted_paths if mounted_paths else None,
                 tools=council_tools,
                 tool_to_session=council_tool_sessions,
@@ -281,7 +360,7 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
 
             # Stage 2: Collect rankings
             yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
-            stage2_results, label_to_model = await stage2_collect_rankings(request.content, stage1_results, models=council_models, attachments=request.attachments, mounted_paths=mounted_paths if mounted_paths else None)
+            stage2_results, label_to_model = await stage2_collect_rankings(request.content, stage1_results, models=council_models, attachments=attachments, mounted_paths=mounted_paths if mounted_paths else None)
             aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
             yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
 
@@ -292,7 +371,7 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 stage1_results,
                 stage2_results,
                 chairman_model=chairman_model,
-                attachments=request.attachments,
+                attachments=attachments,
                 mounted_paths=mounted_paths if mounted_paths else None,
                 allow_writes=request.allow_writes,
                 tools=chairman_tools,
@@ -306,6 +385,7 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 except asyncio.TimeoutError:
                     pass
             stage3_result = await stage3_task
+            _register_write_proposals(stage3_result, conversation_id)
             while not event_queue.empty():
                 yield f"data: {json.dumps(event_queue.get_nowait())}\n\n"
             yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
@@ -313,15 +393,16 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             # Wait for title generation if it was started
             if title_task:
                 title = await title_task
-                storage.update_conversation_title(conversation_id, title)
+                await asyncio.to_thread(storage.update_conversation_title, conversation_id, title)
                 yield f"data: {json.dumps({'type': 'title_complete', 'data': {'title': title}})}\n\n"
 
             # Save complete assistant message
-            storage.add_assistant_message(
+            await asyncio.to_thread(
+                storage.add_assistant_message,
                 conversation_id,
                 stage1_results,
                 stage2_results,
-                stage3_result
+                stage3_result,
             )
 
             # Send completion event
@@ -406,10 +487,11 @@ async def update_conversation_models(conversation_id: str, request: UpdateConver
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    storage.update_conversation_models(
+    await asyncio.to_thread(
+        storage.update_conversation_models,
         conversation_id,
         request.council_models,
-        request.chairman_model
+        request.chairman_model,
     )
     return {
         "council_models": request.council_models,
@@ -420,7 +502,7 @@ async def update_conversation_models(conversation_id: str, request: UpdateConver
 @app.delete("/api/conversations/{conversation_id}")
 async def delete_conversation(conversation_id: str):
     """Delete a conversation."""
-    deleted = storage.delete_conversation(conversation_id)
+    deleted = await asyncio.to_thread(storage.delete_conversation, conversation_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return {"deleted": True}
@@ -430,10 +512,10 @@ async def delete_conversation(conversation_id: str):
 async def archive_conversation(conversation_id: str, request: ArchiveConversationRequest):
     """Archive or unarchive a conversation."""
     try:
-        conversation = storage.archive_conversation(conversation_id, request.archived)
+        conversation = await asyncio.to_thread(storage.archive_conversation, conversation_id, request.archived)
+        return {"archived": conversation.get("archived", False)}
     except ValueError:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    return {"id": conversation_id, "archived": request.archived}
 
 
 @app.get("/api/conversations/{conversation_id}/export")
@@ -657,9 +739,13 @@ async def search_files(path: str, pattern: str):
 
 @app.post("/api/fs/write")
 async def write_file(request: WriteFileRequest):
-    """Write a file to disk. Chairman-only operation requiring user approval."""
+    """Write a file to disk after validating a chairman proposal approval."""
+    proposal = _validate_write_proposal(request.proposal_id, request.path, request.content)
     try:
-        return filesystem.write_file(request.path, request.content)
+        filesystem.set_active_scope(proposal.get("scope"))
+        result = filesystem.write_file(request.path, request.content)
+        proposal["used"] = True
+        return result
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     except Exception as e:
@@ -672,9 +758,9 @@ async def update_conversation_mounts(conversation_id: str, request: UpdateMounts
     conversation = storage.get_conversation(conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    storage.update_conversation_mounts(conversation_id, request.mounted_paths)
-    # Restore mounts in the filesystem module
-    filesystem.restore_mounts(request.mounted_paths)
+    await asyncio.to_thread(storage.update_conversation_mounts, conversation_id, request.mounted_paths)
+    # Restore mounts in the filesystem module, even when the list is empty.
+    filesystem.restore_mounts(request.mounted_paths, scope=conversation_id)
     return {"mounted_paths": request.mounted_paths}
 
 
@@ -708,23 +794,23 @@ async def delete_preset(preset_id: str):
 @app.get("/api/mcp/servers")
 async def list_mcp_servers():
     """List all configured MCP servers."""
-    return mcp_servers_storage.list_servers()
+    return _redact_mcp_servers(mcp_servers_storage.list_servers())
 
 
 @app.post("/api/mcp/servers")
 async def create_mcp_server(request: MCPServerConfigRequest):
     """Add a new MCP server configuration."""
-    server = mcp_servers_storage.add_server(request.dict())
-    return server
+    server = mcp_servers_storage.add_server(request.model_dump())
+    return _redact_mcp_server(server)
 
 
 @app.put("/api/mcp/servers/{server_id}")
 async def update_mcp_server(server_id: str, request: MCPServerConfigRequest):
     """Update an existing MCP server configuration."""
-    updated = mcp_servers_storage.update_server(server_id, request.dict())
+    updated = mcp_servers_storage.update_server(server_id, request.model_dump())
     if not updated:
         raise HTTPException(status_code=404, detail="MCP server not found")
-    return updated
+    return _redact_mcp_server(updated)
 
 
 @app.delete("/api/mcp/servers/{server_id}")

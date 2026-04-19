@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
 import { api } from './api';
@@ -52,19 +52,7 @@ function App() {
     setShowArchived((prev) => !prev);
   };
 
-  // Reload conversations when archive toggle changes
-  useEffect(() => {
-    loadConversations();
-  }, [showArchived]);
-
-  // Load conversations and default config on mount
-  useEffect(() => {
-    loadConversations();
-    loadDefaultConfig();
-    loadModelPricing();
-  }, []);
-
-  const loadModelPricing = async () => {
+  const loadModelPricing = useCallback(async () => {
     try {
       const data = await api.listModels();
       const pricing = {};
@@ -75,9 +63,9 @@ function App() {
     } catch (error) {
       console.error('Failed to load model pricing:', error);
     }
-  };
+  }, []);
 
-  const loadDefaultConfig = async () => {
+  const loadDefaultConfig = useCallback(async () => {
     try {
       const config = await api.getConfig();
       setDefaultConfig(config);
@@ -92,16 +80,9 @@ function App() {
     } catch (error) {
       console.error('Failed to load default config:', error);
     }
-  };
+  }, []);
 
-  // Load conversation details when selected
-  useEffect(() => {
-    if (currentConversationId) {
-      loadConversation(currentConversationId);
-    }
-  }, [currentConversationId]);
-
-  const loadConversations = async () => {
+  const loadConversations = useCallback(async () => {
     try {
       const convs = await api.listConversations(showArchived);
       setConversations(convs);
@@ -113,9 +94,9 @@ function App() {
     } catch (error) {
       console.error('Failed to load conversations:', error);
     }
-  };
+  }, [currentConversationId, showArchived]);
 
-  const loadConversation = async (id) => {
+  const loadConversation = useCallback(async (id) => {
     try {
       const conv = await api.getConversation(id);
       setCurrentConversation(conv);
@@ -130,18 +111,38 @@ function App() {
       setChairmanModel(chairman);
       // Load mounted paths and rehydrate backend mount registry
       const paths = conv.mounted_paths || [];
-      setMountedPaths(paths);
-      if (paths.length > 0) {
-        try {
-          await api.updateConversationMounts(id, paths);
-        } catch (err) {
-          console.error('Failed to restore backend mounts:', err);
-        }
+      try {
+        await api.updateConversationMounts(id, paths);
+      } catch (err) {
+        console.error('Failed to restore backend mounts:', err);
       }
+      setMountedPaths(paths);
     } catch (error) {
       console.error('Failed to load conversation:', error);
     }
-  };
+  }, [defaultConfig]);
+
+  // Reload conversations when archive toggle changes
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadConversations();
+  }, [loadConversations]);
+
+  // Load conversations and default config on mount
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadConversations();
+    loadDefaultConfig();
+    loadModelPricing();
+  }, [loadConversations, loadDefaultConfig, loadModelPricing]);
+
+  // Load conversation details when selected
+  useEffect(() => {
+    if (currentConversationId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      loadConversation(currentConversationId);
+    }
+  }, [currentConversationId, loadConversation]);
 
   const handleNewConversation = async () => {
     try {
@@ -192,7 +193,7 @@ function App() {
   const handleApproveWrites = async (approvedWrites) => {
     for (const write of approvedWrites) {
       try {
-        await api.writeFile(write.path, write.content);
+        await api.writeFile(write.path, write.content, write.id);
       } catch (error) {
         console.error('Failed to write file:', error);
       }

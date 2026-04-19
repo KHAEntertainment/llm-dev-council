@@ -1,19 +1,16 @@
 """MCP client connector for external MCP servers."""
 
-import os
 from contextlib import AsyncExitStack
 from typing import Dict, Any, List, Optional, Tuple
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.sse import sse_client
-from mcp.client.streamable_http import streamable_http_client
-import httpx
+from mcp.client.streamable_http import streamablehttp_client
 
 from . import mcp_servers_storage
 
 
-@staticmethod
 async def _connect_single_server(server: Dict[str, Any], exit_stack: AsyncExitStack) -> Optional[ClientSession]:
     """Connect to a single MCP server and add it to the exit stack."""
     transport = server.get("transport", "stdio")
@@ -23,7 +20,7 @@ async def _connect_single_server(server: Dict[str, Any], exit_stack: AsyncExitSt
             server_params = StdioServerParameters(
                 command=server.get("command", ""),
                 args=server.get("args") or [],
-                env={**os.environ, **(server.get("env") or {})},
+                env=server.get("env") or {},
             )
             read, write = await exit_stack.enter_async_context(stdio_client(server_params))
         elif transport == "streamable_http":
@@ -32,10 +29,8 @@ async def _connect_single_server(server: Dict[str, Any], exit_stack: AsyncExitSt
             auth_token = server.get("auth_token")
             if auth_token:
                 headers["Authorization"] = f"Bearer {auth_token}"
-            client = httpx.AsyncClient(headers=headers or None, timeout=30.0)
-            await exit_stack.enter_async_context(client)
             read, write, _ = await exit_stack.enter_async_context(
-                streamable_http_client(url, http_client=client)
+                streamablehttp_client(url, headers=headers or None, timeout=30.0)
             )
         elif transport == "sse":
             url = server.get("url", "")

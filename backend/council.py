@@ -151,8 +151,11 @@ async def _query_model_with_tools(
                 "content": str(result),
             })
 
-    # Max rounds exceeded — return last response
-    return response
+    # Max rounds exceeded: surface a clear failure instead of a tool-call shell.
+    return {
+        "content": f"Error: {model} exceeded the tool-call limit without producing a final response.",
+        "tool_limit_exceeded": True,
+    }
 
 
 async def stage1_collect_responses(
@@ -189,8 +192,11 @@ async def stage1_collect_responses(
             _query_model_with_tools(model, messages, tools, tool_to_session, stage="stage1", on_event=on_event)
             for model in council_models
         ]
-        responses = await asyncio.gather(*tasks)
-        response_map = {model: resp for model, resp in zip(council_models, responses)}
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
+        response_map = {
+            model: None if isinstance(resp, Exception) else resp
+            for model, resp in zip(council_models, responses)
+        }
     else:
         # Query all models in parallel without tools
         response_map = await query_models_parallel(council_models, messages)

@@ -30,13 +30,13 @@ The tasks document should be based on the design document, so ensure it exists f
 
 ### Create New Tasks (task_type: "create")
 
-1. Read requirements.md and design.md
+1. Read requirements.md and design.md from spec_base_path
 2. Analyze all components that need to be implemented
 3. Create tasks
-4. Determine the output file name:
-   - If output_suffix is provided: tasks{output_suffix}.md
+4. Determine the output file name under spec_base_path:
+   - If output_suffix is provided: tasks_{output_suffix_without_leading_underscore}.md
    - Otherwise: tasks.md
-5. Create task list
+5. Create task list at the computed output file path
 6. Return the result for review
 
 ### Refine/Update Existing Tasks (task_type: "update")
@@ -79,10 +79,10 @@ flowchart TD
 
 ## **Important Constraints**
 
-- The model MUST create a '.claude/specs/{feature_name}/tasks.md' file if it doesn't already exist
+- The model MUST create the computed tasks file under spec_base_path if it doesn't already exist
 - The model MUST return to the design step if the user indicates any changes are needed to the design
 - The model MUST return to the requirement step if the user indicates that we need additional requirements
-- The model MUST create an implementation plan at '.claude/specs/{feature_name}/tasks.md'
+- In create mode, the model MUST write to the computed output file under spec_base_path; in update mode, the model MUST read and write exactly tasks_file_path
 - The model MUST use the following specific instructions when creating the implementation plan:
 
 ```plain

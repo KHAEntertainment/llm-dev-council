@@ -12,6 +12,7 @@ export default function ModelBrowserModal({
   isOpen,
   onClose,
   onAddModel,
+  onRemoveModel,
   onClearModels,
   onSelectModel,
   selectedModelIds = [],
