@@ -22,6 +22,7 @@ export default function PresetManager({
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadPresets();
   }, [loadPresets]);
 

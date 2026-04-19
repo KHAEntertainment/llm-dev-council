@@ -1,17 +1,27 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import './WriteApprovalDialog.css';
 
-export default function WriteApprovalDialog({ proposedWrites, onApprove, onReject }) {
-  const [selected, setSelected] = useState(() =>
-    proposedWrites.reduce((acc, _, i) => ({ ...acc, [i]: true }), {})
-  );
+const getWriteKey = (write, index) => write.id || `${write.path}:${index}`;
 
-  const toggleSelect = (index) => {
-    setSelected((prev) => ({ ...prev, [index]: !prev[index] }));
+export default function WriteApprovalDialog({ proposedWrites, onApprove, onReject }) {
+  const [selected, setSelected] = useState({});
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSelected(
+      proposedWrites.reduce((acc, write, index) => ({
+        ...acc,
+        [getWriteKey(write, index)]: true,
+      }), {})
+    );
+  }, [proposedWrites]);
+
+  const toggleSelect = (key) => {
+    setSelected((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
   const handleApprove = () => {
-    const approved = proposedWrites.filter((_, i) => selected[i]);
+    const approved = proposedWrites.filter((write, index) => selected[getWriteKey(write, index)]);
     if (approved.length > 0) {
       onApprove(approved);
     }
@@ -29,24 +39,27 @@ export default function WriteApprovalDialog({ proposedWrites, onApprove, onRejec
         </div>
 
         <div className="write-approval-list">
-          {proposedWrites.map((write, i) => (
-            <div key={i} className={`write-proposal ${selected[i] ? 'selected' : ''}`}>
-              <label className="write-proposal-check">
-                <input
-                  type="checkbox"
-                  checked={selected[i]}
-                  onChange={() => toggleSelect(i)}
-                />
-              </label>
-              <div className="write-proposal-details">
-                <div className="write-proposal-path">{write.path}</div>
-                {write.description && (
-                  <div className="write-proposal-desc">{write.description}</div>
-                )}
-                <pre className="write-proposal-content">{write.content}</pre>
+          {proposedWrites.map((write, i) => {
+            const key = getWriteKey(write, i);
+            return (
+              <div key={key} className={`write-proposal ${selected[key] ? 'selected' : ''}`}>
+                <label className="write-proposal-check">
+                  <input
+                    type="checkbox"
+                    checked={!!selected[key]}
+                    onChange={() => toggleSelect(key)}
+                  />
+                </label>
+                <div className="write-proposal-details">
+                  <div className="write-proposal-path">{write.path}</div>
+                  {write.description && (
+                    <div className="write-proposal-desc">{write.description}</div>
+                  )}
+                  <pre className="write-proposal-content">{write.content}</pre>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         <div className="write-approval-actions">

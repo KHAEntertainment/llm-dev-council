@@ -45,7 +45,7 @@ Don't focus on code exploration in this phase. Instead, just focus on writing re
 
 1. Analyze the user's feature description
 2. Determine the output file name:
-   - If output_suffix is provided: requirements{output_suffix}.md
+   - If output_suffix is provided: requirements_{output_suffix_without_leading_underscore}.md
    - Otherwise: requirements.md
 3. Create the file in the specified path
 4. Generate EARS format requirements document
@@ -70,7 +70,7 @@ If the requirements clarification process seems to be going in circles or not ma
 ## **Important Constraints**
 
 - The directory '.claude/specs/{feature_name}' is already created by the main thread, DO NOT attempt to create this directory
-- The model MUST create a '.claude/specs/{feature_name}/requirements_{output_suffix}.md' file if it doesn't already exist
+- The model MUST create a '.claude/specs/{feature_name}/requirements_{output_suffix_without_leading_underscore}.md' file if output_suffix is provided, otherwise '.claude/specs/{feature_name}/requirements.md'
 - The model MUST generate an initial version of the requirements document based on the user's rough idea WITHOUT asking sequential questions first
 - The model MUST format the initial requirements.md document with:
 - A clear introduction section that summarizes the feature

@@ -8,7 +8,8 @@ from .config import OPENROUTER_API_KEY, OPENROUTER_API_URL
 async def query_model(
     model: str,
     messages: List[Dict[str, Any]],
-    timeout: float = 120.0
+    timeout: float = 120.0,
+    tools: Optional[List[Dict[str, Any]]] = None
 ) -> Optional[Dict[str, Any]]:
     """
     Query a single model via OpenRouter API.
@@ -17,9 +18,11 @@ async def query_model(
         model: OpenRouter model identifier (e.g., "openai/gpt-4o")
         messages: List of message dicts with 'role' and 'content' (str or multimodal list)
         timeout: Request timeout in seconds
+        tools: Optional list of OpenAI-format tool schemas for function calling
 
     Returns:
-        Response dict with 'content' and optional 'reasoning_details', or None if failed
+        Response dict with 'content', optional 'reasoning_details', and optional 'tool_calls',
+        or None if failed
     """
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -32,6 +35,8 @@ async def query_model(
         "model": model,
         "messages": messages,
     }
+    if tools:
+        payload["tools"] = tools
 
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -47,7 +52,8 @@ async def query_model(
 
             return {
                 'content': message.get('content'),
-                'reasoning_details': message.get('reasoning_details')
+                'reasoning_details': message.get('reasoning_details'),
+                'tool_calls': message.get('tool_calls'),
             }
 
     except Exception as e:
@@ -57,7 +63,8 @@ async def query_model(
 
 async def query_models_parallel(
     models: List[str],
-    messages: List[Dict[str, Any]]
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None
 ) -> Dict[str, Optional[Dict[str, Any]]]:
     """
     Query multiple models in parallel.
@@ -65,6 +72,7 @@ async def query_models_parallel(
     Args:
         models: List of OpenRouter model identifiers
         messages: List of message dicts to send to each model
+        tools: Optional list of OpenAI-format tool schemas
 
     Returns:
         Dict mapping model identifier to response dict (or None if failed)
@@ -72,7 +80,7 @@ async def query_models_parallel(
     import asyncio
 
     # Create tasks for all models
-    tasks = [query_model(model, messages) for model in models]
+    tasks = [query_model(model, messages, tools=tools) for model in models]
 
     # Wait for all to complete
     responses = await asyncio.gather(*tasks)

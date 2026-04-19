@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { api } from '../api';
+import MCPManager from './MCPManager';
 import './Sidebar.css';
 
 export default function Sidebar({
@@ -7,12 +8,15 @@ export default function Sidebar({
   currentConversationId,
   onSelectConversation,
   onNewConversation,
+  darkMode,
+  onToggleDarkMode,
   showArchived,
   onToggleArchived,
   onConversationsChanged,
 }) {
   const [openMenuId, setOpenMenuId] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [showMcpModal, setShowMcpModal] = useState(false);
   const menuRef = useRef(null);
 
   // Close menu on outside click
@@ -96,13 +100,10 @@ export default function Sidebar({
                   {conv.message_count} messages
                 </div>
               </div>
-              <div className="conversation-item-actions" ref={(node) => {
-                if (openMenuId === conv.id) {
-                  menuRef.current = node;
-                } else if (menuRef.current && openMenuId !== conv.id) {
-                  menuRef.current = null;
-                }
-              }}>
+              <div
+                className="conversation-item-actions"
+                ref={openMenuId === conv.id ? menuRef : null}
+              >
                 <button
                   className="menu-btn"
                   onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === conv.id ? null : conv.id); setConfirmDeleteId(null); }}
@@ -147,6 +148,28 @@ export default function Sidebar({
         )}
       </div>
 
+      <div className="sidebar-footer">
+        <button className="sidebar-mcp-btn" onClick={() => setShowMcpModal(true)}>
+          🔌 MCP Servers
+        </button>
+        <button className="theme-toggle" onClick={onToggleDarkMode}>
+          {darkMode ? '☀ Light Mode' : '☾ Dark Mode'}
+        </button>
+      </div>
+
+      {showMcpModal && (
+        <div className="sidebar-modal-overlay" onClick={() => setShowMcpModal(false)}>
+          <div className="sidebar-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="sidebar-modal-header">
+              <h2>MCP Servers</h2>
+              <button className="sidebar-modal-close" onClick={() => setShowMcpModal(false)}>×</button>
+            </div>
+            <div className="sidebar-modal-body">
+              <MCPManager />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

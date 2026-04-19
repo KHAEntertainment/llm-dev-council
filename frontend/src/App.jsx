@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
 import { api } from './api';
@@ -29,23 +29,30 @@ function App() {
   // Pending write proposals from chairman
   const [pendingWrites, setPendingWrites] = useState(null);
 
+  // Current tool-call status for the loading indicator
+  const [toolStatus, setToolStatus] = useState(null);
+
+  // Dark mode state
+  const [darkMode, setDarkMode] = useState(() => {
+    const saved = localStorage.getItem('llm-council-dark-mode');
+    return saved === 'true';
+  });
+
+  // Apply dark mode class to root element
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', darkMode);
+    localStorage.setItem('llm-council-dark-mode', String(darkMode));
+  }, [darkMode]);
+
+  const handleToggleDarkMode = () => {
+    setDarkMode((prev) => !prev);
+  };
+
   const handleToggleArchived = () => {
     setShowArchived((prev) => !prev);
   };
 
-  // Reload conversations when archive toggle changes
-  useEffect(() => {
-    loadConversations();
-  }, [showArchived]);
-
-  // Load conversations and default config on mount
-  useEffect(() => {
-    loadConversations();
-    loadDefaultConfig();
-    loadModelPricing();
-  }, []);
-
-  const loadModelPricing = async () => {
+  const loadModelPricing = useCallback(async () => {
     try {
       const data = await api.listModels();
       const pricing = {};
@@ -56,9 +63,9 @@ function App() {
     } catch (error) {
       console.error('Failed to load model pricing:', error);
     }
-  };
+  }, []);
 
-  const loadDefaultConfig = async () => {
+  const loadDefaultConfig = useCallback(async () => {
     try {
       const config = await api.getConfig();
       setDefaultConfig(config);
@@ -73,16 +80,9 @@ function App() {
     } catch (error) {
       console.error('Failed to load default config:', error);
     }
-  };
+  }, []);
 
-  // Load conversation details when selected
-  useEffect(() => {
-    if (currentConversationId) {
-      loadConversation(currentConversationId);
-    }
-  }, [currentConversationId]);
-
-  const loadConversations = async () => {
+  const loadConversations = useCallback(async () => {
     try {
       const convs = await api.listConversations(showArchived);
       setConversations(convs);
@@ -94,9 +94,9 @@ function App() {
     } catch (error) {
       console.error('Failed to load conversations:', error);
     }
-  };
+  }, [currentConversationId, showArchived]);
 
-  const loadConversation = async (id) => {
+  const loadConversation = useCallback(async (id) => {
     try {
       const conv = await api.getConversation(id);
       setCurrentConversation(conv);
@@ -111,18 +111,38 @@ function App() {
       setChairmanModel(chairman);
       // Load mounted paths and rehydrate backend mount registry
       const paths = conv.mounted_paths || [];
-      setMountedPaths(paths);
-      if (paths.length > 0) {
-        try {
-          await api.updateConversationMounts(id, paths);
-        } catch (err) {
-          console.error('Failed to restore backend mounts:', err);
-        }
+      try {
+        await api.updateConversationMounts(id, paths);
+      } catch (err) {
+        console.error('Failed to restore backend mounts:', err);
       }
+      setMountedPaths(paths);
     } catch (error) {
       console.error('Failed to load conversation:', error);
     }
-  };
+  }, [defaultConfig]);
+
+  // Reload conversations when archive toggle changes
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadConversations();
+  }, [loadConversations]);
+
+  // Load conversations and default config on mount
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadConversations();
+    loadDefaultConfig();
+    loadModelPricing();
+  }, [loadConversations, loadDefaultConfig, loadModelPricing]);
+
+  // Load conversation details when selected
+  useEffect(() => {
+    if (currentConversationId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      loadConversation(currentConversationId);
+    }
+  }, [currentConversationId, loadConversation]);
 
   const handleNewConversation = async () => {
     try {
@@ -130,9 +150,9 @@ function App() {
       const models = councilModels.length > 0 ? councilModels : (defaultConfig?.council_models || null);
       const chairman = chairmanModel || (defaultConfig?.chairman_model || null);
       const newConv = await api.createConversation(models, chairman);
-      setConversations([
+      setConversations((prev) => [
         { id: newConv.id, created_at: newConv.created_at, message_count: 0, title: 'New Conversation' },
-        ...conversations,
+        ...prev,
       ]);
       setCurrentConversationId(newConv.id);
     } catch (error) {
@@ -173,7 +193,7 @@ function App() {
   const handleApproveWrites = async (approvedWrites) => {
     for (const write of approvedWrites) {
       try {
-        await api.writeFile(write.path, write.content);
+        await api.writeFile(write.path, write.content, write.id);
       } catch (error) {
         console.error('Failed to write file:', error);
       }
@@ -185,10 +205,11 @@ function App() {
     setPendingWrites(null);
   };
 
-  const handleSendMessage = async (content, attachments = null, allowWrites = false) => {
+  const handleSendMessage = async (content, attachments = null, allowWrites = false, enableMcpTools = false) => {
     if (!currentConversationId) return;
 
     setIsLoading(true);
+    setToolStatus(null);
     try {
       // Optimistically add user message to UI
       const userMessage = { role: 'user', content, attachments: attachments || undefined };
@@ -274,6 +295,15 @@ function App() {
             });
             break;
 
+          case 'tool_call_start':
+            setToolStatus({ tool: event.tool, model: event.model, stage: event.stage });
+            break;
+
+          case 'tool_call_complete':
+            // Keep the last started tool visible briefly, or clear if no more activity
+            // For now, leave it — next tool_call_start will overwrite
+            break;
+
           case 'stage3_complete':
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
@@ -297,17 +327,19 @@ function App() {
             // Stream complete, reload conversations list
             loadConversations();
             setIsLoading(false);
+            setToolStatus(null);
             break;
 
           case 'error':
             console.error('Stream error:', event.message);
             setIsLoading(false);
+            setToolStatus(null);
             break;
 
           default:
             console.log('Unknown event type:', eventType);
         }
-      }, attachments, allowWrites);
+      }, attachments, allowWrites, enableMcpTools);
     } catch (error) {
       console.error('Failed to send message:', error);
       // Remove optimistic messages on error
@@ -326,6 +358,8 @@ function App() {
         currentConversationId={currentConversationId}
         onSelectConversation={handleSelectConversation}
         onNewConversation={handleNewConversation}
+        darkMode={darkMode}
+        onToggleDarkMode={handleToggleDarkMode}
         showArchived={showArchived}
         onToggleArchived={handleToggleArchived}
         onConversationsChanged={loadConversations}
@@ -334,6 +368,7 @@ function App() {
         conversation={currentConversation}
         onSendMessage={handleSendMessage}
         isLoading={isLoading}
+        toolStatus={toolStatus}
         councilModels={councilModels}
         chairmanModel={chairmanModel}
         onModelsChange={handleModelsChange}

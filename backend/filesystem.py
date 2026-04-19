@@ -8,8 +8,10 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
-# In-memory mount registry (keyed by mount ID)
-_mounts: Dict[str, Dict[str, Any]] = {}
+# In-memory mount registry, isolated by conversation ID.
+_DEFAULT_SCOPE = "__global__"
+_active_scope = _DEFAULT_SCOPE
+_mounts_by_scope: Dict[str, Dict[str, Dict[str, Any]]] = {_DEFAULT_SCOPE: {}}
 
 # Max file size for reading (10MB)
 MAX_READ_SIZE = 10 * 1024 * 1024
@@ -23,6 +25,37 @@ TEXT_EXTENSIONS = {
     '.hpp', '.swift', '.kt', '.scala', '.lua', '.pl', '.php', '.vue',
     '.svelte', '.astro', '.mdx', '.rst', '.tex', '.log', '.conf',
 }
+
+
+def _get_scope_mounts(scope: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+    """Return the mount registry for a conversation scope."""
+    scope_id = scope or _active_scope
+    return _mounts_by_scope.setdefault(scope_id, {})
+
+
+def set_active_scope(scope: Optional[str]) -> None:
+    """Select the conversation scope used by filesystem endpoints."""
+    global _active_scope
+    _active_scope = scope or _DEFAULT_SCOPE
+    _get_scope_mounts(_active_scope)
+
+
+def _is_safe_search_pattern(pattern: str) -> bool:
+    """Reject glob patterns that can escape the validated search root."""
+    if not pattern or os.path.isabs(pattern):
+        return False
+    parts = Path(pattern).parts
+    return ".." not in parts
+
+
+def _is_within_directory(root: str, candidate: str) -> bool:
+    """Return whether candidate is inside root after symlink resolution."""
+    root_resolved = os.path.realpath(root)
+    candidate_resolved = os.path.realpath(candidate)
+    try:
+        return os.path.commonpath([root_resolved, candidate_resolved]) == root_resolved
+    except ValueError:
+        return False
 
 
 def _is_text_file(filepath: str) -> bool:
@@ -42,7 +75,7 @@ def _resolve_and_validate(path: str, mounted_paths: List[str]) -> str:
 
 def get_mounted_paths() -> List[str]:
     """Return list of all currently mounted absolute paths."""
-    return [m["path"] for m in _mounts.values()]
+    return [m["path"] for m in _get_scope_mounts().values()]
 
 
 def mount_folder(path: str) -> Dict[str, Any]:
@@ -53,8 +86,9 @@ def mount_folder(path: str) -> Dict[str, Any]:
     if not os.path.isdir(resolved):
         raise NotADirectoryError(f"Path is not a directory: {path}")
 
+    mounts = _get_scope_mounts()
     # Check if already mounted
-    for mid, mount in _mounts.items():
+    for mid, mount in mounts.items():
         if mount["path"] == resolved:
             return {"mount_id": mid, **mount}
 
@@ -64,21 +98,22 @@ def mount_folder(path: str) -> Dict[str, Any]:
         "name": os.path.basename(resolved),
         "mounted_at": datetime.utcnow().isoformat(),
     }
-    _mounts[mount_id] = mount_data
+    mounts[mount_id] = mount_data
     return {"mount_id": mount_id, **mount_data}
 
 
 def unmount_folder(mount_id: str) -> bool:
     """Unmount a folder by its mount ID."""
-    if mount_id in _mounts:
-        del _mounts[mount_id]
+    mounts = _get_scope_mounts()
+    if mount_id in mounts:
+        del mounts[mount_id]
         return True
     return False
 
 
 def list_mounts() -> List[Dict[str, Any]]:
     """List all current mounts."""
-    return [{"mount_id": mid, **data} for mid, data in _mounts.items()]
+    return [{"mount_id": mid, **data} for mid, data in _get_scope_mounts().items()]
 
 
 def list_directory(path: str) -> List[Dict[str, Any]]:
@@ -141,11 +176,15 @@ def read_file(path: str) -> Dict[str, Any]:
 
 
 def search_files(path: str, pattern: str) -> List[Dict[str, Any]]:
-    """Search for files matching a glob pattern within a mounted path."""
+    """Search for files matching a safe glob pattern within a mounted path."""
     resolved = _resolve_and_validate(path, get_mounted_paths())
+    if not _is_safe_search_pattern(pattern):
+        raise PermissionError("Search pattern must be relative and cannot contain '..'")
 
     results = []
     for match in glob.glob(os.path.join(resolved, '**', pattern), recursive=True):
+        if not _is_within_directory(resolved, match):
+            continue
         if os.path.isfile(match):
             stat = os.stat(match)
             results.append({
@@ -178,10 +217,11 @@ def write_file(path: str, content: str) -> Dict[str, Any]:
     }
 
 
-def restore_mounts(paths: List[str]) -> List[Dict[str, Any]]:
-    """Restore mounts from a list of paths (e.g., from conversation metadata).
+def restore_mounts(paths: List[str], scope: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Restore mounts for a conversation scope.
     Clears stale mounts not in the incoming paths, then re-adds. Skips paths that no longer exist."""
-    global _mounts
+    set_active_scope(scope)
+    mounts = _get_scope_mounts()
 
     # Compute set of resolved paths we want to keep
     desired_resolved = set()
@@ -194,11 +234,11 @@ def restore_mounts(paths: List[str]) -> List[Dict[str, Any]]:
 
     # Remove mounts not in the desired set
     stale_ids = [
-        mid for mid, mount in _mounts.items()
+        mid for mid, mount in mounts.items()
         if mount["path"] not in desired_resolved
     ]
     for mid in stale_ids:
-        del _mounts[mid]
+        del mounts[mid]
 
     # Re-add mounts for each path
     restored = []

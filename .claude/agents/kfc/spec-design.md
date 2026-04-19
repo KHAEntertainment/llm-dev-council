@@ -108,7 +108,7 @@ The design document should be based on the requirements document, so ensure it e
 1. Read the requirements.md to understand the requirements
 2. Conduct necessary technical research
 3. Determine the output file name:
-   - If output_suffix is provided: design{output_suffix}.md
+   - If output_suffix is provided: design_{output_suffix_without_leading_underscore}.md
    - Otherwise: design.md
 4. Create the design document
 5. Return the result for review
