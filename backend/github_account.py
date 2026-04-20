@@ -160,11 +160,12 @@ def create_oauth_start(frontend_redirect: Optional[str] = None) -> Dict[str, Any
         "frontend_redirect": frontend_redirect,
         "created_at": datetime.utcnow().isoformat(),
     })
-    scope = "read:user repo"
+    scope = os.getenv("GITHUB_OAUTH_SCOPE", "").strip()
+    scope_param = f"&scope={scope.replace(' ', '%20')}" if scope else ""
     url = (
         f"{GITHUB_OAUTH_AUTHORIZE_URL}"
         f"?client_id={client_id}"
-        f"&scope={scope.replace(' ', '%20')}"
+        f"{scope_param}"
         f"&state={state}"
     )
     return {"authorization_url": url, "state": state}
