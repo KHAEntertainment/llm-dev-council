@@ -54,6 +54,7 @@ def create_conversation(conversation_id: str, council_models: Optional[list] = N
         "council_models": council_models,
         "chairman_model": chairman_model,
         "mounted_paths": [],
+        "github_mounts": [],
     }
 
     # Save to file
@@ -254,6 +255,22 @@ def update_conversation_mounts(conversation_id: str, mounted_paths: list):
         raise ValueError(f"Conversation {conversation_id} not found")
 
     conversation["mounted_paths"] = mounted_paths
+    save_conversation(conversation)
+
+
+def update_conversation_github_mounts(conversation_id: str, github_mounts: list):
+    """
+    Update the mounted GitHub repositories for a conversation.
+
+    Args:
+        conversation_id: Conversation identifier
+        github_mounts: List of GitHub repository mount metadata dicts
+    """
+    conversation = get_conversation(conversation_id)
+    if conversation is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+
+    conversation["github_mounts"] = github_mounts
     save_conversation(conversation)
 
 

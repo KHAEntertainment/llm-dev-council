@@ -3,9 +3,10 @@
 import asyncio
 import json
 from typing import List, Dict, Any, Tuple, Optional, Callable
-from .openrouter import query_models_parallel, query_model
+from .providers import query_models_parallel, query_model
 from .config import get_council_models, get_chairman_model
 from . import filesystem
+from . import github_repos
 from . import mcp_connectors
 
 # Maximum size for inline text/json attachments (100KB)
@@ -33,6 +34,16 @@ def _build_fs_context(mounted_paths: List[str] = None) -> str:
 
     lines.append("--- End Filesystem Context ---\n")
     return "\n".join(lines)
+
+
+async def _build_context_summary(
+    mounted_paths: Optional[List[str]] = None,
+    github_mounts: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """Build a bounded context summary for local folders and GitHub repo mounts."""
+    local_context = _build_fs_context(mounted_paths)
+    github_context = await github_repos.build_context_summary(github_mounts or [])
+    return local_context + github_context
 
 
 def format_user_message(content: str, attachments: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
@@ -163,6 +174,7 @@ async def stage1_collect_responses(
     models: Optional[List[str]] = None,
     attachments: Optional[List[Dict[str, Any]]] = None,
     mounted_paths: Optional[List[str]] = None,
+    github_mounts: Optional[List[Dict[str, Any]]] = None,
     tools: Optional[List[Dict[str, Any]]] = None,
     tool_to_session: Optional[Dict[str, Any]] = None,
     on_event: Optional[Callable[[Dict[str, Any]], None]] = None,
@@ -175,6 +187,7 @@ async def stage1_collect_responses(
         models: Optional list of model IDs to use (defaults to config)
         attachments: Optional file/image attachments
         mounted_paths: Optional list of mounted folder paths for context
+        github_mounts: Optional list of mounted GitHub repositories for context
         tools: Optional OpenAI-format tool schemas for function calling
         tool_to_session: Optional map of tool_name -> ClientSession for execution
 
@@ -182,7 +195,7 @@ async def stage1_collect_responses(
         List of dicts with 'model' and 'response' keys
     """
     council_models = models if models is not None else get_council_models()
-    fs_context = _build_fs_context(mounted_paths)
+    fs_context = await _build_context_summary(mounted_paths, github_mounts)
     query_with_context = user_query + fs_context if fs_context else user_query
     messages = [format_user_message(query_with_context, attachments)]
 
@@ -218,7 +231,8 @@ async def stage2_collect_rankings(
     stage1_results: List[Dict[str, Any]],
     models: Optional[List[str]] = None,
     attachments: Optional[List[Dict[str, Any]]] = None,
-    mounted_paths: Optional[List[str]] = None
+    mounted_paths: Optional[List[str]] = None,
+    github_mounts: Optional[List[Dict[str, Any]]] = None
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """
     Stage 2: Each model ranks the anonymized responses.
@@ -245,9 +259,12 @@ async def stage2_collect_rankings(
         for label, result in zip(labels, stage1_results)
     ])
 
+    fs_context = await _build_context_summary(mounted_paths, github_mounts)
+
     ranking_prompt = f"""You are evaluating different responses to the following question:
 
 Question: {user_query}
+{fs_context}
 
 Here are the responses from different models (anonymized):
 
@@ -304,6 +321,7 @@ async def stage3_synthesize_final(
     chairman_model: Optional[str] = None,
     attachments: Optional[List[Dict[str, Any]]] = None,
     mounted_paths: Optional[List[str]] = None,
+    github_mounts: Optional[List[Dict[str, Any]]] = None,
     allow_writes: bool = False,
     tools: Optional[List[Dict[str, Any]]] = None,
     tool_to_session: Optional[Dict[str, Any]] = None,
@@ -333,7 +351,7 @@ async def stage3_synthesize_final(
         for result in stage2_results
     ])
 
-    fs_context = _build_fs_context(mounted_paths)
+    fs_context = await _build_context_summary(mounted_paths, github_mounts)
 
     write_instruction = ""
     if allow_writes and mounted_paths:
@@ -547,6 +565,7 @@ async def run_full_council(
     chairman_model: Optional[str] = None,
     attachments: Optional[List[Dict[str, Any]]] = None,
     mounted_paths: Optional[List[str]] = None,
+    github_mounts: Optional[List[Dict[str, Any]]] = None,
     allow_writes: bool = False,
     enable_mcp_tools: bool = False,
     on_event: Optional[Callable[[Dict[str, Any]], None]] = None,
@@ -559,6 +578,7 @@ async def run_full_council(
         council_models: Optional list of council model IDs
         chairman_model: Optional chairman model ID
         attachments: Optional list of file/image attachments for multimodal queries
+        github_mounts: Optional list of mounted GitHub repositories
         enable_mcp_tools: Whether to inject MCP tools into Stage 1 and Stage 3
 
     Returns:
@@ -591,6 +611,7 @@ async def run_full_council(
             models=council_models,
             attachments=attachments,
             mounted_paths=mounted_paths,
+            github_mounts=github_mounts,
             tools=council_tools,
             tool_to_session=council_tool_sessions,
             on_event=on_event,
@@ -605,7 +626,12 @@ async def run_full_council(
 
         # Stage 2: Collect rankings
         stage2_results, label_to_model = await stage2_collect_rankings(
-            user_query, stage1_results, models=council_models, attachments=attachments, mounted_paths=mounted_paths
+            user_query,
+            stage1_results,
+            models=council_models,
+            attachments=attachments,
+            mounted_paths=mounted_paths,
+            github_mounts=github_mounts,
         )
 
         # Calculate aggregate rankings
@@ -619,6 +645,7 @@ async def run_full_council(
             chairman_model=chairman_model,
             attachments=attachments,
             mounted_paths=mounted_paths,
+            github_mounts=github_mounts,
             allow_writes=allow_writes,
             tools=chairman_tools,
             tool_to_session=chairman_tool_sessions,

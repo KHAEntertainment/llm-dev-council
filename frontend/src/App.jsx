@@ -25,6 +25,7 @@ function App() {
 
   // Mounted folder paths for current conversation
   const [mountedPaths, setMountedPaths] = useState([]);
+  const [githubMounts, setGithubMounts] = useState([]);
 
   // Pending write proposals from chairman
   const [pendingWrites, setPendingWrites] = useState(null);
@@ -90,6 +91,8 @@ function App() {
       if (currentConversationId && !convs.find(c => c.id === currentConversationId)) {
         setCurrentConversationId(null);
         setCurrentConversation(null);
+        setMountedPaths([]);
+        setGithubMounts([]);
       }
     } catch (error) {
       console.error('Failed to load conversations:', error);
@@ -117,6 +120,14 @@ function App() {
         console.error('Failed to restore backend mounts:', err);
       }
       setMountedPaths(paths);
+      const repoMounts = conv.github_mounts || [];
+      try {
+        const restored = await api.updateConversationGithubMounts(id, repoMounts);
+        setGithubMounts(restored.github_mounts || repoMounts);
+      } catch (err) {
+        console.error('Failed to restore GitHub mounts:', err);
+        setGithubMounts(repoMounts);
+      }
     } catch (error) {
       console.error('Failed to load conversation:', error);
     }
@@ -186,6 +197,18 @@ function App() {
         await api.updateConversationMounts(currentConversationId, newMounts);
       } catch (error) {
         console.error('Failed to update conversation mounts:', error);
+      }
+    }
+  };
+
+  const handleGithubMountsChange = async (newMounts) => {
+    setGithubMounts(newMounts);
+    if (currentConversationId) {
+      try {
+        const restored = await api.updateConversationGithubMounts(currentConversationId, newMounts);
+        setGithubMounts(restored.github_mounts || newMounts);
+      } catch (error) {
+        console.error('Failed to update GitHub mounts:', error);
       }
     }
   };
@@ -375,6 +398,8 @@ function App() {
         modelPricing={modelPricing}
         mountedPaths={mountedPaths}
         onMountsChange={handleMountsChange}
+        githubMounts={githubMounts}
+        onGithubMountsChange={handleGithubMountsChange}
         pendingWrites={pendingWrites}
         onApproveWrites={handleApproveWrites}
         onRejectWrites={handleRejectWrites}

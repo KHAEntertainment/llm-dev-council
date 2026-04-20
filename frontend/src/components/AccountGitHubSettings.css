@@ -1,0 +1,105 @@
+.account-github-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.account-status-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 13px;
+}
+
+.account-status-label {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.account-status-value {
+  color: var(--text-primary);
+  font-family: monospace;
+}
+
+.account-status-value.connected {
+  color: #2f855a;
+}
+
+.account-actions,
+.account-token-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.account-primary-btn,
+.account-secondary-btn,
+.account-danger-btn {
+  padding: 7px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+}
+
+.account-primary-btn {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.account-secondary-btn {
+  background: var(--bg-card);
+  color: var(--text-secondary);
+}
+
+.account-danger-btn {
+  background: var(--bg-card);
+  color: #c53030;
+}
+
+.account-danger-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.account-token-box {
+  border-top: 1px solid var(--border-primary);
+  padding-top: 12px;
+}
+
+.account-token-box label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.account-token-box input {
+  flex: 1;
+  padding: 7px 10px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.account-token-box p {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.account-message {
+  color: #2f855a;
+  font-size: 12px;
+}
+
+.account-error {
+  color: #c53030;
+  font-size: 12px;
+}

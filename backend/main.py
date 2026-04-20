@@ -1,12 +1,13 @@
 """FastAPI backend for LLM Council."""
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Dict, Any, Optional, Literal
 import uuid
 import json
+import html
 import asyncio
 import httpx
 from datetime import datetime
@@ -14,10 +15,13 @@ from datetime import datetime
 from . import storage
 from . import presets
 from . import filesystem
+from . import github_account
+from . import github_repos
 from . import mcp_servers_storage
 from . import mcp_connectors
 from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings
 from .config import load_config, save_config, get_council_models, get_chairman_model, OPENROUTER_API_KEY
+from .providers import list_copilot_models_if_configured
 
 app = FastAPI(title="LLM Council API")
 
@@ -116,6 +120,28 @@ class UpdateMountsRequest(BaseModel):
     mounted_paths: List[str]
 
 
+class MountGithubRepoRequest(BaseModel):
+    """Request to mount a GitHub repository."""
+    repo: str
+    ref: Optional[str] = None
+    path: Optional[str] = None
+
+
+class UpdateGithubMountsRequest(BaseModel):
+    """Request to restore conversation GitHub mounts."""
+    github_mounts: List[Dict[str, Any]]
+
+
+class SaveGithubTokenRequest(BaseModel):
+    """Request to store a local GitHub token."""
+    token: str
+
+
+class GithubOAuthStartRequest(BaseModel):
+    """Request to begin GitHub OAuth."""
+    frontend_redirect: Optional[str] = None
+
+
 class MCPServerConfigRequest(BaseModel):
     """Request to create or update an MCP server config."""
     name: str
@@ -148,6 +174,7 @@ class Conversation(BaseModel):
     council_models: Optional[List[str]] = None
     chairman_model: Optional[str] = None
     mounted_paths: List[str] = Field(default_factory=list)
+    github_mounts: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 def _register_write_proposals(stage3_result: Dict[str, Any], scope: str) -> None:
@@ -251,6 +278,9 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
     council_models = conversation.get("council_models")
     chairman_model = conversation.get("chairman_model")
     mounted_paths = conversation.get("mounted_paths", [])
+    github_mounts = conversation.get("github_mounts", [])
+    filesystem.restore_mounts(mounted_paths, scope=conversation_id)
+    await github_repos.restore_mounts(github_mounts, scope=conversation_id)
 
     # Run the 3-stage council process
     stage1_results, stage2_results, stage3_result, metadata = await run_full_council(
@@ -259,6 +289,7 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
         chairman_model=chairman_model,
         attachments=attachments,
         mounted_paths=mounted_paths if mounted_paths else None,
+        github_mounts=github_mounts if github_mounts else None,
         allow_writes=request.allow_writes,
         enable_mcp_tools=request.enable_mcp_tools
     )
@@ -314,6 +345,9 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             council_models = conv.get("council_models")
             chairman_model = conv.get("chairman_model")
             mounted_paths = conv.get("mounted_paths", [])
+            github_mounts = conv.get("github_mounts", [])
+            filesystem.restore_mounts(mounted_paths, scope=conversation_id)
+            await github_repos.restore_mounts(github_mounts, scope=conversation_id)
 
             # --- MCP Tool Setup ---
             council_tools = None
@@ -343,6 +377,7 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 models=council_models,
                 attachments=attachments,
                 mounted_paths=mounted_paths if mounted_paths else None,
+                github_mounts=github_mounts if github_mounts else None,
                 tools=council_tools,
                 tool_to_session=council_tool_sessions,
                 on_event=on_event,
@@ -360,7 +395,14 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
 
             # Stage 2: Collect rankings
             yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
-            stage2_results, label_to_model = await stage2_collect_rankings(request.content, stage1_results, models=council_models, attachments=attachments, mounted_paths=mounted_paths if mounted_paths else None)
+            stage2_results, label_to_model = await stage2_collect_rankings(
+                request.content,
+                stage1_results,
+                models=council_models,
+                attachments=attachments,
+                mounted_paths=mounted_paths if mounted_paths else None,
+                github_mounts=github_mounts if github_mounts else None,
+            )
             aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
             yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
 
@@ -373,6 +415,7 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 chairman_model=chairman_model,
                 attachments=attachments,
                 mounted_paths=mounted_paths if mounted_paths else None,
+                github_mounts=github_mounts if github_mounts else None,
                 allow_writes=request.allow_writes,
                 tools=chairman_tools,
                 tool_to_session=chairman_tool_sessions,
@@ -436,7 +479,7 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
 
 @app.get("/api/models")
 async def list_models():
-    """Fetch available models from OpenRouter."""
+    """Fetch available models from OpenRouter and configured additive providers."""
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(
@@ -445,20 +488,71 @@ async def list_models():
             )
             response.raise_for_status()
             data = response.json()
-            return {
-                "models": [
+            models = [
                     {
                         "id": m["id"],
                         "name": m.get("name", m["id"]),
                         "description": m.get("description", ""),
                         "context_length": m.get("context_length", 0),
                         "pricing": m.get("pricing", {"prompt": "0", "completion": "0"}),
+                        "provider": "openrouter",
                     }
                     for m in data.get("data", [])
                 ]
-            }
+            models.extend(list_copilot_models_if_configured())
+            return {"models": models}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to fetch models from OpenRouter: {str(e)}") from e
+
+
+# --- GitHub account endpoints ---
+
+@app.get("/api/account/github/status")
+async def github_status():
+    """Return browser-safe GitHub account status."""
+    return github_account.get_github_status()
+
+
+@app.post("/api/account/github/token")
+async def save_github_token(request: SaveGithubTokenRequest):
+    """Store a local GitHub token after verifying it against GitHub."""
+    try:
+        return await github_account.store_access_token(request.token, token_source="local")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=403, detail=f"GitHub token was rejected: {e.response.status_code}") from e
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.delete("/api/account/github")
+async def disconnect_github():
+    """Remove stored local GitHub account data."""
+    github_account.disconnect_github()
+    return github_account.get_github_status()
+
+
+@app.post("/api/account/github/oauth/start")
+async def start_github_oauth(request: GithubOAuthStartRequest):
+    """Create a GitHub OAuth authorization URL."""
+    try:
+        return github_account.create_oauth_start(request.frontend_redirect)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get("/api/account/github/oauth/callback")
+async def github_oauth_callback(code: str, state: str):
+    """Handle GitHub OAuth callback for local single-user account setup."""
+    try:
+        await github_account.complete_oauth_callback(code, state)
+        return HTMLResponse(
+            "<html><body><h1>GitHub connected</h1><p>You can close this tab and return to LLM Council.</p></body></html>"
+        )
+    except Exception as e:
+        return HTMLResponse(
+            f"<html><body><h1>GitHub connection failed</h1><p>{html.escape(str(e))}</p></body></html>",
+            status_code=400,
+        )
 
 
 @app.get("/api/config")
@@ -762,6 +856,105 @@ async def update_conversation_mounts(conversation_id: str, request: UpdateMounts
     # Restore mounts in the filesystem module, even when the list is empty.
     filesystem.restore_mounts(request.mounted_paths, scope=conversation_id)
     return {"mounted_paths": request.mounted_paths}
+
+
+@app.post("/api/conversations/{conversation_id}/github-mounts")
+async def mount_github_repo(conversation_id: str, request: MountGithubRepoRequest):
+    """Mount a GitHub repository read-only for a conversation."""
+    conversation = storage.get_conversation(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    try:
+        github_repos.set_active_scope(conversation_id)
+        result = await github_repos.mount_repo(request.repo, ref=request.ref, path=request.path)
+        mounts = github_repos.list_mounts()
+        await asyncio.to_thread(storage.update_conversation_github_mounts, conversation_id, mounts)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=502, detail=f"GitHub API error: {e.response.status_code}") from e
+
+
+@app.put("/api/conversations/{conversation_id}/github-mounts")
+async def update_github_mounts(conversation_id: str, request: UpdateGithubMountsRequest):
+    """Restore GitHub repository mounts for a conversation."""
+    conversation = storage.get_conversation(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    restored = await github_repos.restore_mounts(request.github_mounts, scope=conversation_id)
+    await asyncio.to_thread(storage.update_conversation_github_mounts, conversation_id, restored)
+    return {"github_mounts": restored}
+
+
+@app.get("/api/conversations/{conversation_id}/github-mounts")
+async def list_github_mounts(conversation_id: str):
+    """List GitHub repository mounts for a conversation."""
+    conversation = storage.get_conversation(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    github_repos.set_active_scope(conversation_id)
+    return github_repos.list_mounts()
+
+
+@app.delete("/api/conversations/{conversation_id}/github-mounts/{mount_id}")
+async def unmount_github_repo(conversation_id: str, mount_id: str):
+    """Unmount a GitHub repository from a conversation."""
+    conversation = storage.get_conversation(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    github_repos.set_active_scope(conversation_id)
+    if not github_repos.unmount_repo(mount_id):
+        raise HTTPException(status_code=404, detail="GitHub mount not found")
+    mounts = github_repos.list_mounts()
+    await asyncio.to_thread(storage.update_conversation_github_mounts, conversation_id, mounts)
+    return {"unmounted": True}
+
+
+@app.get("/api/conversations/{conversation_id}/github/browse")
+async def browse_github_repo(conversation_id: str, path: str):
+    """Browse a directory inside a mounted GitHub repository."""
+    if storage.get_conversation(conversation_id) is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    try:
+        github_repos.set_active_scope(conversation_id)
+        return await github_repos.list_directory(path)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.get("/api/conversations/{conversation_id}/github/read")
+async def read_github_file(conversation_id: str, path: str):
+    """Read a file inside a mounted GitHub repository."""
+    if storage.get_conversation(conversation_id) is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    try:
+        github_repos.set_active_scope(conversation_id)
+        return await github_repos.read_file(path)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=413, detail=str(e)) from e
+
+
+@app.get("/api/conversations/{conversation_id}/github/search")
+async def search_github_files(conversation_id: str, path: str, pattern: str):
+    """Search files inside a mounted GitHub repository."""
+    if storage.get_conversation(conversation_id) is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    try:
+        github_repos.set_active_scope(conversation_id)
+        return await github_repos.search_files(path, pattern)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
 
 
 @app.get("/api/presets")

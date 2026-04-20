@@ -206,6 +206,30 @@
   border-color: var(--accent-hover);
 }
 
+.sidebar-account-btn {
+  width: 100%;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: inherit;
+}
+
+.sidebar-account-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
 .sidebar-modal-overlay {
   position: fixed;
   top: 0;
@@ -370,4 +394,3 @@
 .confirm-no:hover {
   background: var(--bg-hover);
 }
-

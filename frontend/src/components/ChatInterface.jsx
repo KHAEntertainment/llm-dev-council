@@ -5,6 +5,7 @@ import Stage2 from './Stage2';
 import Stage3 from './Stage3';
 import ModelSelector from './ModelSelector';
 import FolderManager from './FolderManager';
+import GitHubRepoManager from './GitHubRepoManager';
 import WriteApprovalDialog from './WriteApprovalDialog';
 import './ChatInterface.css';
 
@@ -59,6 +60,8 @@ export default function ChatInterface({
   modelPricing,
   mountedPaths,
   onMountsChange,
+  githubMounts,
+  onGithubMountsChange,
   pendingWrites,
   onApproveWrites,
   onRejectWrites,
@@ -180,6 +183,11 @@ export default function ChatInterface({
             {mountedPaths !== undefined && (
               <div className="empty-state-models" style={{ marginTop: 12 }}>
                 <FolderManager mountedPaths={mountedPaths} onMountsChange={onMountsChange} />
+                <GitHubRepoManager
+                  conversationId={conversation.id}
+                  githubMounts={githubMounts}
+                  onGithubMountsChange={onGithubMountsChange}
+                />
               </div>
             )}
           </div>
@@ -344,6 +352,11 @@ export default function ChatInterface({
               disabled={isLoading}
             />
             <FolderManager mountedPaths={mountedPaths} onMountsChange={onMountsChange} />
+            <GitHubRepoManager
+              conversationId={conversation.id}
+              githubMounts={githubMounts}
+              onGithubMountsChange={onGithubMountsChange}
+            />
           </div>
           <form className="input-form compact" onSubmit={handleSubmit}>
             <input

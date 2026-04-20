@@ -408,6 +408,124 @@ export const api = {
     return response.json();
   },
 
+  // --- GitHub Account API ---
+
+  async getGithubStatus() {
+    const response = await fetch(`${API_BASE}/api/account/github/status`);
+    if (!response.ok) throw new Error('Failed to get GitHub status');
+    return response.json();
+  },
+
+  async saveGithubToken(token) {
+    const response = await fetch(`${API_BASE}/api/account/github/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || 'Failed to save GitHub token');
+    }
+    return response.json();
+  },
+
+  async disconnectGithub() {
+    const response = await fetch(`${API_BASE}/api/account/github`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) throw new Error('Failed to disconnect GitHub');
+    return response.json();
+  },
+
+  async startGithubOAuth(frontendRedirect = window.location.origin) {
+    const response = await fetch(`${API_BASE}/api/account/github/oauth/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ frontend_redirect: frontendRedirect }),
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || 'Failed to start GitHub OAuth');
+    }
+    return response.json();
+  },
+
+  // --- GitHub Repository Mount API ---
+
+  async mountGithubRepo(conversationId, repo, ref = '', path = '') {
+    const response = await fetch(`${API_BASE}/api/conversations/${conversationId}/github-mounts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        repo,
+        ref: ref || null,
+        path: path || null,
+      }),
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || 'Failed to mount GitHub repository');
+    }
+    return response.json();
+  },
+
+  async updateConversationGithubMounts(conversationId, githubMounts) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/github-mounts`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ github_mounts: githubMounts }),
+      }
+    );
+    if (!response.ok) throw new Error('Failed to update GitHub mounts');
+    return response.json();
+  },
+
+  async listGithubMounts(conversationId) {
+    const response = await fetch(`${API_BASE}/api/conversations/${conversationId}/github-mounts`);
+    if (!response.ok) throw new Error('Failed to list GitHub mounts');
+    return response.json();
+  },
+
+  async unmountGithubRepo(conversationId, mountId) {
+    const response = await fetch(`${API_BASE}/api/conversations/${conversationId}/github-mounts/${mountId}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || 'Failed to unmount GitHub repository');
+    }
+    return response.json();
+  },
+
+  async browseGithubRepo(conversationId, path) {
+    const response = await fetch(`${API_BASE}/api/conversations/${conversationId}/github/browse?path=${encodeURIComponent(path)}`);
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || 'Failed to browse GitHub repository');
+    }
+    return response.json();
+  },
+
+  async readGithubFile(conversationId, path) {
+    const response = await fetch(`${API_BASE}/api/conversations/${conversationId}/github/read?path=${encodeURIComponent(path)}`);
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || 'Failed to read GitHub file');
+    }
+    return response.json();
+  },
+
+  async searchGithubFiles(conversationId, path, pattern) {
+    const response = await fetch(`${API_BASE}/api/conversations/${conversationId}/github/search?path=${encodeURIComponent(path)}&pattern=${encodeURIComponent(pattern)}`);
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || 'Failed to search GitHub files');
+    }
+    return response.json();
+  },
+
   // --- MCP Server API ---
 
   async listMCPServers() {

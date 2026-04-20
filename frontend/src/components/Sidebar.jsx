@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { api } from '../api';
 import MCPManager from './MCPManager';
+import AccountGitHubSettings from './AccountGitHubSettings';
 import './Sidebar.css';
 
 export default function Sidebar({
@@ -17,6 +18,7 @@ export default function Sidebar({
   const [openMenuId, setOpenMenuId] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const [showMcpModal, setShowMcpModal] = useState(false);
+  const [showAccountModal, setShowAccountModal] = useState(false);
   const menuRef = useRef(null);
 
   // Close menu on outside click
@@ -149,6 +151,9 @@ export default function Sidebar({
       </div>
 
       <div className="sidebar-footer">
+        <button className="sidebar-account-btn" onClick={() => setShowAccountModal(true)}>
+          GitHub Account
+        </button>
         <button className="sidebar-mcp-btn" onClick={() => setShowMcpModal(true)}>
           🔌 MCP Servers
         </button>
@@ -166,6 +171,20 @@ export default function Sidebar({
             </div>
             <div className="sidebar-modal-body">
               <MCPManager />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showAccountModal && (
+        <div className="sidebar-modal-overlay" onClick={() => setShowAccountModal(false)}>
+          <div className="sidebar-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="sidebar-modal-header">
+              <h2>GitHub Account</h2>
+              <button className="sidebar-modal-close" onClick={() => setShowAccountModal(false)}>×</button>
+            </div>
+            <div className="sidebar-modal-body">
+              <AccountGitHubSettings />
             </div>
           </div>
         </div>
